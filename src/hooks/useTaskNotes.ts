@@ -1,5 +1,14 @@
 import { useState, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  deleteDoc, 
+  getDocs, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { TaskNote, Profile } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
 
@@ -8,37 +17,39 @@ export function useTaskNotes(profile: Profile | null) {
   const { toast } = useToast();
 
   const fetchNotes = useCallback(async (taskId: string): Promise<TaskNote[]> => {
-    const { data, error } = await supabase
-      .from('task_notes')
-      .select('*, creator:profiles!task_notes_created_by_fkey(*)')
-      .eq('task_id', taskId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching notes:', error);
+    try {
+      const q = query(
+        collection(db, 'task_notes'),
+        where('task_id', '==', taskId)
+      );
+      const snap = await getDocs(q);
+      const notes = snap.docs.map(d => ({ id: d.id, ...d.data() } as TaskNote));
+      notes.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      return notes;
+    } catch (error) {
+      console.error('Error fetching notes in Firestore:', error);
       return [];
     }
-
-    return data as TaskNote[];
   }, []);
 
   const addNote = useCallback(async (taskId: string, content: string) => {
     if (!profile) return null;
     
     setLoading(true);
-    const { data, error } = await supabase
-      .from('task_notes')
-      .insert({
+    try {
+      const newNote = {
         task_id: taskId,
         content,
         created_by: profile.id,
-      })
-      .select('*, creator:profiles!task_notes_created_by_fkey(*)')
-      .single();
+        creator: profile,
+        created_at: new Date().toISOString(),
+      };
 
-    setLoading(false);
-
-    if (error) {
+      const docRef = await addDoc(collection(db, 'task_notes'), newNote);
+      setLoading(false);
+      return { id: docRef.id, ...newNote } as TaskNote;
+    } catch (error) {
+      setLoading(false);
       toast({
         title: 'Error',
         description: 'No se pudo agregar la nota',
@@ -46,17 +57,13 @@ export function useTaskNotes(profile: Profile | null) {
       });
       return null;
     }
-
-    return data as TaskNote;
   }, [profile, toast]);
 
   const deleteNote = useCallback(async (noteId: string) => {
-    const { error } = await supabase
-      .from('task_notes')
-      .delete()
-      .eq('id', noteId);
-
-    if (error) {
+    try {
+      await deleteDoc(doc(db, 'task_notes', noteId));
+      return true;
+    } catch (error) {
       toast({
         title: 'Error',
         description: 'No se pudo eliminar la nota',
@@ -64,8 +71,6 @@ export function useTaskNotes(profile: Profile | null) {
       });
       return false;
     }
-
-    return true;
   }, [toast]);
 
   return {

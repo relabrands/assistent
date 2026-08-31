@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Profile, Task } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
 import { differenceInHours, differenceInDays, parseISO, isAfter, startOfDay } from 'date-fns';
@@ -48,7 +49,6 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
   const showNotification = useCallback((title: string, options?: NotificationOptions) => {
     if (permission !== 'granted') return;
 
-    // Use the Service Worker to show notification if available
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
       navigator.serviceWorker.ready.then((registration) => {
         registration.showNotification(title, {
@@ -58,7 +58,6 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
         });
       });
     } else {
-      // Fallback to regular notification
       new Notification(title, {
         icon: '/pwa-192x192.png',
         ...options,
@@ -66,7 +65,6 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
     }
   }, [permission]);
 
-  // Check for upcoming due dates
   const checkUpcomingTasks = useCallback(() => {
     if (permission !== 'granted' || !profile) return;
 
@@ -80,14 +78,12 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
       const hoursUntilDue = differenceInHours(dueDate, now);
       const daysUntilDue = differenceInDays(dueDate, now);
 
-      // Already notified for this task today
       const lastNotified = notifiedTaskIds[task.id];
       if (lastNotified && lastNotified === startOfDay(now).toISOString()) return;
 
       let shouldNotify = false;
       let message = '';
 
-      // Due today (0-24 hours)
       if (hoursUntilDue > 0 && hoursUntilDue <= 24) {
         shouldNotify = true;
         if (hoursUntilDue <= 2) {
@@ -95,14 +91,10 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
         } else {
           message = `Vence hoy - ${Math.round(hoursUntilDue)} horas restantes`;
         }
-      }
-      // Due tomorrow
-      else if (daysUntilDue === 1) {
+      } else if (daysUntilDue === 1) {
         shouldNotify = true;
         message = 'Vence mañana';
-      }
-      // Overdue
-      else if (hoursUntilDue < 0 && isAfter(now, dueDate)) {
+      } else if (hoursUntilDue < 0 && isAfter(now, dueDate)) {
         shouldNotify = true;
         message = '⚠️ Tarea vencida';
       }
@@ -110,31 +102,25 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
       if (shouldNotify) {
         showNotification(`📋 ${task.title}`, {
           body: message,
-          tag: task.id, // Prevents duplicate notifications
+          tag: task.id,
           data: { taskId: task.id },
         });
 
-        // Mark as notified
         notifiedTaskIds[task.id] = startOfDay(now).toISOString();
         localStorage.setItem('notifiedTasks', JSON.stringify(notifiedTaskIds));
       }
     });
   }, [tasks, profile, permission, showNotification]);
 
-  // Check for upcoming tasks on load and periodically
   useEffect(() => {
     if (permission !== 'granted' || !profile) return;
 
-    // Check immediately
     checkUpcomingTasks();
-
-    // Check every 30 minutes
     const interval = setInterval(checkUpcomingTasks, 30 * 60 * 1000);
 
     return () => clearInterval(interval);
   }, [checkUpcomingTasks, permission, profile]);
 
-  // Save push subscription to database (for future server-side notifications)
   const savePushSubscription = useCallback(async () => {
     if (!profile || !isSupported || permission !== 'granted') return;
 
@@ -145,16 +131,13 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
       if (subscription) {
         const keys = subscription.toJSON().keys;
         if (keys) {
-          await supabase
-            .from('push_subscriptions')
-            .upsert({
-              user_id: profile.id,
-              endpoint: subscription.endpoint,
-              p256dh: keys.p256dh || '',
-              auth: keys.auth || '',
-            }, {
-              onConflict: 'user_id,endpoint',
-            });
+          await setDoc(doc(db, 'push_subscriptions', profile.id), {
+            user_id: profile.id,
+            endpoint: subscription.endpoint,
+            p256dh: keys.p256dh || '',
+            auth: keys.auth || '',
+            updated_at: new Date().toISOString(),
+          });
         }
       }
     } catch (error) {

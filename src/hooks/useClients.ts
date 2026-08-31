@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Client } from '@/types/content';
 import { Profile } from '@/types/database';
 import { toast } from 'sonner';
@@ -8,58 +18,35 @@ export function useClients(profile: Profile | null, projectId: string | null = n
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchClients = useCallback(async () => {
+  useEffect(() => {
     if (!profile) {
       setClients([]);
       setLoading(false);
       return;
     }
 
-    try {
-      let query = supabase
-        .from('clients')
-        .select('*')
-        .order('name');
+    setLoading(true);
 
-      if (projectId) {
-        query = query.eq('project_id', projectId);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
-      setClients((data || []) as Client[]);
-    } catch (error) {
-      console.error('Error fetching clients:', error);
-      toast.error('Error al cargar clientes');
-    } finally {
-      setLoading(false);
+    let clientsQuery;
+    if (projectId) {
+      clientsQuery = query(collection(db, 'clients'), where('project_id', '==', projectId));
+    } else {
+      clientsQuery = query(collection(db, 'clients'));
     }
+
+    const unsubscribe = onSnapshot(clientsQuery, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Client));
+      items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      setClients(items);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching clients from Firestore:', error);
+      toast.error('Error al cargar clientes');
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [profile, projectId]);
-
-  useEffect(() => {
-    fetchClients();
-
-    // Set up realtime subscription
-    const channel = supabase
-      .channel('clients_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'clients',
-        },
-        () => {
-          fetchClients();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [fetchClients]);
 
   const addClient = useCallback(async (clientData: {
     project_id: string;
@@ -80,21 +67,18 @@ export function useClients(profile: Profile | null, projectId: string | null = n
     if (!profile) return null;
 
     try {
-      const { data, error } = await supabase
-        .from('clients')
-        .insert({
-          ...clientData,
-          created_by: profile.id,
-        })
-        .select()
-        .single();
+      const newClient = {
+        ...clientData,
+        created_by: profile.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-
+      const docRef = await addDoc(collection(db, 'clients'), newClient);
       toast.success('Cliente creado correctamente');
-      return data as Client;
+      return { id: docRef.id, ...newClient } as Client;
     } catch (error) {
-      console.error('Error creating client:', error);
+      console.error('Error creating client in Firestore:', error);
       toast.error('Error al crear cliente');
       return null;
     }
@@ -102,17 +86,14 @@ export function useClients(profile: Profile | null, projectId: string | null = n
 
   const updateClient = useCallback(async (id: string, clientData: Partial<Omit<Client, 'id' | 'created_at' | 'updated_at' | 'created_by'>>) => {
     try {
-      const { error } = await supabase
-        .from('clients')
-        .update(clientData)
-        .eq('id', id);
-
-      if (error) throw error;
-
+      await updateDoc(doc(db, 'clients', id), {
+        ...clientData,
+        updated_at: new Date().toISOString(),
+      });
       toast.success('Cliente actualizado');
       return true;
     } catch (error) {
-      console.error('Error updating client:', error);
+      console.error('Error updating client in Firestore:', error);
       toast.error('Error al actualizar cliente');
       return false;
     }
@@ -120,17 +101,11 @@ export function useClients(profile: Profile | null, projectId: string | null = n
 
   const deleteClient = useCallback(async (id: string) => {
     try {
-      const { error } = await supabase
-        .from('clients')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-
+      await deleteDoc(doc(db, 'clients', id));
       toast.success('Cliente eliminado');
       return true;
     } catch (error) {
-      console.error('Error deleting client:', error);
+      console.error('Error deleting client in Firestore:', error);
       toast.error('Error al eliminar cliente');
       return false;
     }
@@ -142,6 +117,6 @@ export function useClients(profile: Profile | null, projectId: string | null = n
     addClient,
     updateClient,
     deleteClient,
-    refetch: fetchClients,
+    refetch: () => {},
   };
 }

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Client } from '@/types/content';
 import { Profile } from '@/types/database';
-import { supabase } from '@/integrations/supabase/client';
+import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,36 +51,37 @@ export function InviteClientModal({
     setIsLoading(true);
 
     try {
-      const { data, error } = await supabase.functions.invoke('invite-client', {
-        body: {
-          email: email.trim().toLowerCase(),
-          clientId: client.id,
-          clientName: client.brand_name || client.name,
-          inviterProfileId: profile.id,
-          inviterName: profile.display_name,
-          appUrl: window.location.origin,
-          role: role,
-        },
-      });
+      const cleanEmail = email.trim().toLowerCase();
+      // Find if profile exists for this email
+      const q = query(collection(db, 'profiles'), where('email', '==', cleanEmail));
+      const snap = await getDocs(q);
 
-      if (error) throw error;
-      
-      if (!data.success) {
-        throw new Error(data.error || 'Error al enviar invitación');
+      let targetUserId = '';
+      if (!snap.empty) {
+        targetUserId = snap.docs[0].id;
+      } else {
+        targetUserId = cleanEmail.replace(/[^a-zA-Z0-9]/g, '_');
       }
+
+      await addDoc(collection(db, 'client_access'), {
+        client_id: client.id,
+        user_id: targetUserId,
+        email: cleanEmail,
+        granted_by: profile.id,
+        role: role,
+        created_at: new Date().toISOString(),
+      });
 
       setIsSuccess(true);
       toast({
-        title: data.isNewUser ? 'Usuario creado e invitado' : 'Acceso otorgado',
-        description: data.isNewUser 
-          ? 'Se creó la cuenta y se envió el email con las credenciales'
-          : 'El usuario ya existía y se le otorgó acceso al cliente',
+        title: 'Acceso otorgado',
+        description: `Se registró el acceso para ${cleanEmail}`,
       });
     } catch (error: any) {
       console.error('Error inviting client:', error);
       toast({
         title: 'Error',
-        description: error.message || 'No se pudo enviar la invitación',
+        description: error.message || 'No se pudo registrar el acceso',
         variant: 'destructive',
       });
     } finally {
@@ -126,9 +128,9 @@ export function InviteClientModal({
             <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
               <CheckCircle className="w-6 h-6 text-green-600" />
             </div>
-            <h3 className="font-medium mb-1">¡Invitación enviada!</h3>
+            <h3 className="font-medium mb-1">¡Invitación registrada!</h3>
             <p className="text-sm text-muted-foreground mb-4">
-              El cliente recibirá un email con sus credenciales de acceso.
+              El cliente ya tiene acceso configurado para este proyecto.
             </p>
             <Button onClick={handleClose}>Cerrar</Button>
           </div>
@@ -149,9 +151,6 @@ export function InviteClientModal({
                   required
                 />
               </div>
-              <p className="text-xs text-muted-foreground">
-                Se creará una cuenta automáticamente si el usuario no existe.
-              </p>
             </div>
 
             <div className="space-y-2">
@@ -209,7 +208,7 @@ export function InviteClientModal({
               </Button>
               <Button type="submit" disabled={isLoading} className="flex-1">
                 {isLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Enviar invitación
+                Registrar acceso
               </Button>
             </div>
           </form>

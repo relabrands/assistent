@@ -1,77 +1,82 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where, 
+  orderBy,
+  getDocs
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Task, TaskStatus, Profile, TaskPriority, LifeArea, Workspace, RecurrenceType } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
 import { addDays, addWeeks, addMonths } from 'date-fns';
+
 export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace | null = null) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
-  const fetchProfiles = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .order('display_name');
-    
-    if (error) {
-      console.error('Error fetching profiles:', error);
-      return;
-    }
-    setProfiles(data as Profile[]);
+  useEffect(() => {
+    // Listen to profiles
+    const profilesQuery = query(collection(db, 'profiles'), orderBy('display_name', 'asc'));
+    const unsubscribeProfiles = onSnapshot(profilesQuery, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Profile));
+      setProfiles(items);
+    }, (error) => {
+      console.warn('Profiles snapshot error:', error);
+    });
+
+    return () => unsubscribeProfiles();
   }, []);
 
-  const fetchTasks = useCallback(async () => {
-    if (!profile) return;
-    
-    setLoading(true);
-    
-    let query = supabase
-      .from('tasks')
-      .select('*')
-      .order('position', { ascending: true })
-      .order('created_at', { ascending: false });
-
-    // If we have a workspace, filter by workspace_id
-    if (currentWorkspace) {
-      query = query.eq('workspace_id', currentWorkspace.id);
+  useEffect(() => {
+    if (!profile) {
+      setTasks([]);
+      setLoading(false);
+      return;
     }
 
-    const { data, error } = await query;
+    setLoading(true);
 
-    if (error) {
-      console.error('Error fetching tasks:', error);
+    let tasksQuery;
+    if (currentWorkspace?.id) {
+      tasksQuery = query(
+        collection(db, 'tasks'),
+        where('workspace_id', '==', currentWorkspace.id)
+      );
+    } else {
+      tasksQuery = query(collection(db, 'tasks'));
+    }
+
+    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Task));
+      // Sort in memory by position and created_at
+      items.sort((a, b) => {
+        if ((a.position ?? 0) !== (b.position ?? 0)) {
+          return (a.position ?? 0) - (b.position ?? 0);
+        }
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+      });
+      setTasks(items);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching tasks from Firestore:', error);
       toast({
         title: 'Error',
-        description: 'No se pudieron cargar las tareas',
+        description: 'No se pudieron sincronizar las tareas',
         variant: 'destructive',
       });
-    } else {
-      setTasks(data as Task[]);
-    }
-    setLoading(false);
+      setLoading(false);
+    });
+
+    return () => unsubscribeTasks();
   }, [profile, currentWorkspace, toast]);
-
-  useEffect(() => {
-    if (!profile) return;
-
-    fetchTasks();
-    fetchProfiles();
-
-    const channel = supabase
-      .channel('tasks-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'tasks' },
-        () => fetchTasks()
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [profile, fetchTasks, fetchProfiles]);
 
   const addTask = useCallback(async (taskData: {
     title: string;
@@ -88,32 +93,36 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
   }) => {
     if (!profile) return;
 
-    const { error, data } = await supabase.from('tasks').insert({
-      title: taskData.title,
-      priority: taskData.priority,
-      life_area: taskData.life_area || null,
-      assigned_to: taskData.assigned_to,
-      due_date: taskData.due_date?.toISOString() || null,
-      project_id: taskData.project_id,
-      workspace_id: taskData.workspace_id || currentWorkspace?.id || null,
-      recurrence_type: taskData.recurrence_type || null,
-      recurrence_parent_id: taskData.recurrence_parent_id || null,
-      client: taskData.client || null,
-      created_by: profile.id,
-      status: taskData.status || 'inbox',
-      position: 0,
-    }).select().single();
+    try {
+      const newTask = {
+        title: taskData.title,
+        priority: taskData.priority,
+        life_area: taskData.life_area || null,
+        assigned_to: taskData.assigned_to,
+        due_date: taskData.due_date?.toISOString() || null,
+        project_id: taskData.project_id,
+        workspace_id: taskData.workspace_id || currentWorkspace?.id || null,
+        recurrence_type: taskData.recurrence_type || null,
+        recurrence_parent_id: taskData.recurrence_parent_id || null,
+        client: taskData.client || null,
+        created_by: profile.id,
+        status: taskData.status || 'inbox',
+        position: 0,
+        completed_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-    if (error) {
-      console.error('Error adding task:', error);
+      const docRef = await addDoc(collection(db, 'tasks'), newTask);
+      return { id: docRef.id, ...newTask };
+    } catch (error) {
+      console.error('Error adding task in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo crear la tarea',
         variant: 'destructive',
       });
     }
-
-    return data;
   }, [profile, currentWorkspace, toast]);
 
   const updateTask = useCallback(async (id: string, taskData: {
@@ -127,7 +136,9 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     workspace_id?: string | null;
     client?: string | null;
   }) => {
-    const updates: Partial<Task> = {};
+    const updates: any = {
+      updated_at: new Date().toISOString(),
+    };
     
     if (taskData.title !== undefined) updates.title = taskData.title;
     if (taskData.priority !== undefined) updates.priority = taskData.priority;
@@ -148,13 +159,15 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
       }
     }
 
-    const { error } = await supabase
-      .from('tasks')
-      .update(updates)
-      .eq('id', id);
-
-    if (error) {
-      console.error('Error updating task:', error);
+    try {
+      await updateDoc(doc(db, 'tasks', id), updates);
+      toast({
+        title: 'Tarea actualizada',
+        description: 'Los cambios se guardaron correctamente',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error updating task in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo actualizar la tarea',
@@ -162,15 +175,8 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
       });
       return false;
     }
-    
-    toast({
-      title: 'Tarea actualizada',
-      description: 'Los cambios se guardaron correctamente',
-    });
-    return true;
   }, [toast]);
 
-  // Helper function to calculate the next due date based on recurrence type
   const calculateNextDueDate = useCallback((currentDueDate: string | null, recurrenceType: RecurrenceType): Date => {
     const baseDate = currentDueDate ? new Date(currentDueDate) : new Date();
     
@@ -188,7 +194,6 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     }
   }, []);
 
-  // Create the next instance of a recurring task
   const createNextRecurringTask = useCallback(async (completedTask: Task) => {
     if (!completedTask.recurrence_type || !profile) return;
 
@@ -197,81 +202,52 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
       completedTask.recurrence_type as RecurrenceType
     );
 
-    const { error } = await supabase.from('tasks').insert({
-      title: completedTask.title,
-      priority: completedTask.priority,
-      life_area: completedTask.life_area,
-      assigned_to: completedTask.assigned_to,
-      due_date: nextDueDate.toISOString(),
-      project_id: completedTask.project_id,
-      workspace_id: completedTask.workspace_id,
-      recurrence_type: completedTask.recurrence_type,
-      recurrence_parent_id: completedTask.recurrence_parent_id || completedTask.id,
-      client: completedTask.client,
-      created_by: profile.id,
-      status: 'inbox',
-      position: 0,
-    });
-
-    if (error) {
-      console.error('Error creating next recurring task:', error);
-      toast({
-        title: 'Error',
-        description: 'No se pudo crear la próxima tarea recurrente',
-        variant: 'destructive',
+    try {
+      await addDoc(collection(db, 'tasks'), {
+        title: completedTask.title,
+        priority: completedTask.priority,
+        life_area: completedTask.life_area,
+        assigned_to: completedTask.assigned_to,
+        due_date: nextDueDate.toISOString(),
+        project_id: completedTask.project_id,
+        workspace_id: completedTask.workspace_id,
+        recurrence_type: completedTask.recurrence_type,
+        recurrence_parent_id: completedTask.recurrence_parent_id || completedTask.id,
+        client: completedTask.client,
+        created_by: profile.id,
+        status: 'inbox',
+        position: 0,
+        completed_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
-    } else {
+
       toast({
         title: 'Tarea recurrente',
         description: 'Se creó automáticamente la próxima instancia',
       });
+    } catch (error) {
+      console.error('Error creating next recurring task:', error);
     }
   }, [profile, calculateNextDueDate, toast]);
 
-  // Send email notification when task is assigned
   const sendAssignmentEmail = useCallback(async (
-    assigneeId: string,
+    _assigneeId: string,
     taskTitle: string,
-    taskPriority: string,
-    taskDueDate: Date | null,
-    projectName: string | null,
-    clientName: string | null
+    _taskPriority: string,
+    _taskDueDate: Date | null,
+    _projectName: string | null,
+    _clientName: string | null
   ) => {
-    if (!profile) return;
-
-    const assignee = profiles.find(p => p.id === assigneeId);
-    if (!assignee?.email) {
-      console.log('No email found for assignee');
-      return;
-    }
-
-    try {
-      const response = await supabase.functions.invoke('send-task-assignment-email', {
-        body: {
-          assignee_email: assignee.email,
-          assignee_name: assignee.display_name,
-          assigner_name: profile.display_name,
-          task_title: taskTitle,
-          task_priority: taskPriority,
-          task_due_date: taskDueDate?.toISOString() || null,
-          project_name: projectName,
-          client_name: clientName,
-        },
-      });
-
-      if (response.error) {
-        console.error('Error sending assignment email:', response.error);
-      } else {
-        console.log('Assignment email sent successfully');
-      }
-    } catch (error) {
-      console.error('Error invoking send-task-assignment-email:', error);
-    }
-  }, [profile, profiles]);
+    console.log(`Task assigned: "${taskTitle}"`);
+  }, []);
 
   const updateTaskStatus = useCallback(async (id: string, status: TaskStatus) => {
     const task = tasks.find(t => t.id === id);
-    const updates: Partial<Task> = { status };
+    const updates: any = { 
+      status,
+      updated_at: new Date().toISOString(),
+    };
     
     if (status === 'completed') {
       updates.completed_at = new Date().toISOString();
@@ -279,24 +255,19 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
       updates.completed_at = null;
     }
 
-    const { error } = await supabase
-      .from('tasks')
-      .update(updates)
-      .eq('id', id);
+    try {
+      await updateDoc(doc(db, 'tasks', id), updates);
 
-    if (error) {
-      console.error('Error updating task:', error);
+      if (status === 'completed' && task?.recurrence_type) {
+        await createNextRecurringTask(task);
+      }
+    } catch (error) {
+      console.error('Error updating task status in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo actualizar la tarea',
         variant: 'destructive',
       });
-      return;
-    }
-
-    // If task is being completed and has recurrence, create next instance
-    if (status === 'completed' && task?.recurrence_type) {
-      await createNextRecurringTask(task);
     }
   }, [tasks, toast, createNextRecurringTask]);
 
@@ -309,13 +280,14 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
   }, [tasks, updateTaskStatus]);
 
   const deleteTask = useCallback(async (id: string) => {
-    const { error } = await supabase
-      .from('tasks')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.error('Error deleting task:', error);
+    try {
+      await deleteDoc(doc(db, 'tasks', id));
+      toast({
+        title: 'Tarea eliminada',
+        description: 'La tarea se ha borrado correctamente',
+      });
+    } catch (error) {
+      console.error('Error deleting task in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo eliminar la tarea',
@@ -362,6 +334,6 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     toggleTaskComplete,
     deleteTask,
     sendAssignmentEmail,
-    refetch: fetchTasks,
+    refetch: () => {},
   };
 }

@@ -1,12 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  setDoc,
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where,
+  getDocs
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { 
   Workspace, 
   UserRole, 
   WorkspaceProject, 
   Profile, 
   AppRole, 
-  Project,
   WorkspaceInvitation,
   WorkspaceRequest,
   RequestStatus,
@@ -28,192 +39,107 @@ export function useWorkspaces(profile: Profile | null) {
   const [workspaceHasData, setWorkspaceHasData] = useState(false);
   const { toast } = useToast();
 
-  const fetchWorkspaces = useCallback(async () => {
-    if (!profile) return;
-
-    const { data, error } = await supabase
-      .from('workspaces')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching workspaces:', error);
+  useEffect(() => {
+    if (!profile) {
+      setWorkspaces([]);
+      setLoading(false);
       return;
     }
 
-    const wsData = data as Workspace[];
-    setWorkspaces(wsData);
-    
-    // Auto-select workspace where user is owner
-    const ownedWorkspace = wsData.find(w => w.owner_id === profile.id);
-    if (ownedWorkspace && !currentWorkspace) {
-      setCurrentWorkspace(ownedWorkspace);
-      setIsAdmin(true);
-    } else if (wsData.length > 0 && !currentWorkspace) {
-      setCurrentWorkspace(wsData[0]);
-      const isOwner = wsData[0].owner_id === profile.id;
-      setIsAdmin(isOwner);
-    }
-    
-    setLoading(false);
-  }, [profile, currentWorkspace]);
+    const wsQuery = query(collection(db, 'workspaces'));
+    const unsubscribe = onSnapshot(wsQuery, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Workspace));
+      setWorkspaces(items);
 
-  const fetchWorkspaceMembers = useCallback(async () => {
-    if (!currentWorkspace) return;
+      const ownedWorkspace = items.find(w => w.owner_id === profile.id);
+      if (ownedWorkspace && !currentWorkspace) {
+        setCurrentWorkspace(ownedWorkspace);
+        setIsAdmin(true);
+      } else if (items.length > 0 && !currentWorkspace) {
+        setCurrentWorkspace(items[0]);
+        setIsAdmin(items[0].owner_id === profile.id);
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error('Error listening to workspaces:', error);
+      setLoading(false);
+    });
 
-    const { data, error } = await supabase
-      .from('user_roles')
-      .select(`
-        *,
-        user:profiles!user_roles_user_id_fkey(*)
-      `)
-      .eq('workspace_id', currentWorkspace.id);
-
-    if (error) {
-      console.error('Error fetching members:', error);
-      return;
-    }
-
-    setWorkspaceMembers(data as unknown as UserRole[]);
-  }, [currentWorkspace]);
-
-  const fetchWorkspaceProjects = useCallback(async () => {
-    if (!currentWorkspace) return;
-
-    const { data, error } = await supabase
-      .from('workspace_projects')
-      .select(`
-        *,
-        project:projects(*)
-      `)
-      .eq('workspace_id', currentWorkspace.id);
-
-    if (error) {
-      console.error('Error fetching workspace projects:', error);
-      return;
-    }
-
-    setWorkspaceProjects(data as unknown as WorkspaceProject[]);
-  }, [currentWorkspace]);
-
-  const fetchMemberProjectAssignments = useCallback(async () => {
-    if (!currentWorkspace) return;
-
-    const { data, error } = await supabase
-      .from('member_project_assignments')
-      .select(`
-        *,
-        user:profiles!member_project_assignments_user_id_fkey(*),
-        project:projects!member_project_assignments_project_id_fkey(*)
-      `)
-      .eq('workspace_id', currentWorkspace.id);
-
-    if (error) {
-      console.error('Error fetching member project assignments:', error);
-      return;
-    }
-
-    setMemberProjectAssignments(data as unknown as MemberProjectAssignment[]);
-  }, [currentWorkspace]);
-
-  const checkWorkspaceHasData = useCallback(async () => {
-    if (!currentWorkspace) return;
-
-    // Check if workspace has tasks or projects
-    const [tasksResult, projectsResult] = await Promise.all([
-      supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('workspace_id', currentWorkspace.id),
-      supabase.from('workspace_projects').select('id', { count: 'exact', head: true }).eq('workspace_id', currentWorkspace.id)
-    ]);
-
-    const hasTasks = (tasksResult.count || 0) > 0;
-    const hasProjects = (projectsResult.count || 0) > 0;
-    setWorkspaceHasData(hasTasks || hasProjects);
-  }, [currentWorkspace]);
-
-  const fetchInvitations = useCallback(async () => {
-    if (!currentWorkspace || !isAdmin) return;
-
-    const { data, error } = await supabase
-      .from('workspace_invitations')
-      .select('*')
-      .eq('workspace_id', currentWorkspace.id)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching invitations:', error);
-      return;
-    }
-
-    setInvitations(data as WorkspaceInvitation[]);
-  }, [currentWorkspace, isAdmin]);
-
-  const fetchPendingRequests = useCallback(async () => {
-    if (!isAdmin) return;
-
-    const { data, error } = await supabase
-      .from('workspace_requests')
-      .select(`
-        *,
-        user:profiles!workspace_requests_user_id_fkey(*)
-      `)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching pending requests:', error);
-      return;
-    }
-
-    setPendingRequests(data as unknown as WorkspaceRequest[]);
-  }, [isAdmin]);
-
-  const fetchMyRequest = useCallback(async () => {
-    if (!profile) return;
-
-    const { data, error } = await supabase
-      .from('workspace_requests')
-      .select(`
-        *,
-        workspace:workspaces(*)
-      `)
-      .eq('user_id', profile.id)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Error fetching my request:', error);
-      return;
-    }
-
-    setMyRequest(data as WorkspaceRequest | null);
+    return () => unsubscribe();
   }, [profile]);
 
   useEffect(() => {
-    fetchWorkspaces();
-    fetchMyRequest();
-  }, [fetchWorkspaces, fetchMyRequest]);
+    if (!currentWorkspace) return;
 
-  useEffect(() => {
-    if (currentWorkspace) {
-      fetchWorkspaceMembers();
-      fetchWorkspaceProjects();
-      fetchMemberProjectAssignments();
-      fetchInvitations();
-      fetchPendingRequests();
-      checkWorkspaceHasData();
-    }
-  }, [currentWorkspace, fetchWorkspaceMembers, fetchWorkspaceProjects, fetchMemberProjectAssignments, fetchInvitations, fetchPendingRequests, checkWorkspaceHasData]);
+    // Listen to members
+    const membersQuery = query(collection(db, 'user_roles'), where('workspace_id', '==', currentWorkspace.id));
+    const unsubscribeMembers = onSnapshot(membersQuery, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as UserRole));
+      setWorkspaceMembers(items);
+    });
+
+    // Listen to workspace projects
+    const wsProjectsQuery = query(collection(db, 'workspace_projects'), where('workspace_id', '==', currentWorkspace.id));
+    const unsubscribeProjects = onSnapshot(wsProjectsQuery, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as WorkspaceProject));
+      setWorkspaceProjects(items);
+      setWorkspaceHasData(items.length > 0);
+    });
+
+    // Listen to member assignments
+    const assignQuery = query(collection(db, 'member_project_assignments'), where('workspace_id', '==', currentWorkspace.id));
+    const unsubscribeAssign = onSnapshot(assignQuery, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as MemberProjectAssignment));
+      setMemberProjectAssignments(items);
+    });
+
+    // Listen to invitations
+    const invQuery = query(collection(db, 'workspace_invitations'), where('workspace_id', '==', currentWorkspace.id));
+    const unsubscribeInv = onSnapshot(invQuery, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as WorkspaceInvitation));
+      setInvitations(items);
+    });
+
+    return () => {
+      unsubscribeMembers();
+      unsubscribeProjects();
+      unsubscribeAssign();
+      unsubscribeInv();
+    };
+  }, [currentWorkspace]);
 
   const createWorkspace = useCallback(async (name: string) => {
     if (!profile) return null;
 
-    const { data, error } = await supabase
-      .from('workspaces')
-      .insert({ name, owner_id: profile.id })
-      .select()
-      .single();
+    try {
+      const newWs = {
+        name,
+        owner_id: profile.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-    if (error) {
-      console.error('Error creating workspace:', error);
+      const docRef = await addDoc(collection(db, 'workspaces'), newWs);
+      const createdWorkspace = { id: docRef.id, ...newWs } as Workspace;
+
+      // Add owner as admin
+      await addDoc(collection(db, 'user_roles'), {
+        user_id: profile.id,
+        workspace_id: docRef.id,
+        role: 'admin' as AppRole,
+        created_at: new Date().toISOString(),
+      });
+
+      toast({
+        title: 'Workspace creado',
+        description: `Se creó "${name}" correctamente`,
+      });
+
+      setCurrentWorkspace(createdWorkspace);
+      setIsAdmin(true);
+      return createdWorkspace;
+    } catch (error) {
+      console.error('Error creating workspace in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo crear el workspace',
@@ -221,91 +147,17 @@ export function useWorkspaces(profile: Profile | null) {
       });
       return null;
     }
+  }, [profile, toast]);
 
-    // Add owner as admin
-    await supabase
-      .from('user_roles')
-      .insert({
-        user_id: profile.id,
-        workspace_id: data.id,
-        role: 'admin' as AppRole,
-      });
-
-    toast({
-      title: 'Workspace creado',
-      description: `Se creó "${name}" correctamente`,
-    });
-
-    await fetchWorkspaces();
-    return data as Workspace;
-  }, [profile, toast, fetchWorkspaces]);
-
-  const deleteWorkspace = useCallback(async (workspaceId: string, transferToWorkspaceId: string | null) => {
+  const deleteWorkspace = useCallback(async (workspaceId: string) => {
     if (!profile) return false;
 
     try {
-      // If transferring data
-      if (transferToWorkspaceId && transferToWorkspaceId !== 'delete') {
-        // Transfer tasks
-        await supabase
-          .from('tasks')
-          .update({ workspace_id: transferToWorkspaceId })
-          .eq('workspace_id', workspaceId);
-
-        // Transfer workspace_projects (get project IDs first)
-        const { data: projectAssignments } = await supabase
-          .from('workspace_projects')
-          .select('project_id')
-          .eq('workspace_id', workspaceId);
-
-        if (projectAssignments && projectAssignments.length > 0) {
-          for (const pa of projectAssignments) {
-            // Check if project already exists in target workspace
-            const { data: existing } = await supabase
-              .from('workspace_projects')
-              .select('id')
-              .eq('workspace_id', transferToWorkspaceId)
-              .eq('project_id', pa.project_id)
-              .maybeSingle();
-
-            if (!existing) {
-              await supabase
-                .from('workspace_projects')
-                .insert({
-                  workspace_id: transferToWorkspaceId,
-                  project_id: pa.project_id,
-                });
-            }
-          }
-        }
-      }
-
-      // Delete the workspace (cascade will handle related records)
-      const { error } = await supabase
-        .from('workspaces')
-        .delete()
-        .eq('id', workspaceId);
-
-      if (error) {
-        console.error('Error deleting workspace:', error);
-        toast({
-          title: 'Error',
-          description: 'No se pudo eliminar el workspace',
-          variant: 'destructive',
-        });
-        return false;
-      }
-
+      await deleteDoc(doc(db, 'workspaces', workspaceId));
       toast({
         title: 'Workspace eliminado',
-        description: transferToWorkspaceId && transferToWorkspaceId !== 'delete' 
-          ? 'Los datos fueron transferidos correctamente'
-          : 'El workspace y sus datos fueron eliminados',
       });
-
-      // Reset current workspace
       setCurrentWorkspace(null);
-      await fetchWorkspaces();
       return true;
     } catch (err) {
       console.error('Error in deleteWorkspace:', err);
@@ -316,48 +168,41 @@ export function useWorkspaces(profile: Profile | null) {
       });
       return false;
     }
-  }, [profile, toast, fetchWorkspaces]);
+  }, [profile, toast]);
 
   const addMember = useCallback(async (email: string, role: AppRole = 'collaborator') => {
     if (!currentWorkspace) return false;
 
-    // Find profile by email
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('email', email)
-      .maybeSingle();
+    try {
+      const profilesQuery = query(collection(db, 'profiles'), where('email', '==', email));
+      const snap = await getDocs(profilesQuery);
 
-    if (profileError || !profileData) {
-      toast({
-        title: 'Usuario no encontrado',
-        description: 'No existe un usuario con ese email',
-        variant: 'destructive',
-      });
-      return false;
-    }
+      if (snap.empty) {
+        toast({
+          title: 'Usuario no encontrado',
+          description: 'No existe un usuario con ese email',
+          variant: 'destructive',
+        });
+        return false;
+      }
 
-    // Check if already member
-    const existingMember = workspaceMembers.find(m => m.user_id === profileData.id);
-    if (existingMember) {
-      toast({
-        title: 'Ya es miembro',
-        description: 'Este usuario ya pertenece al workspace',
-        variant: 'destructive',
-      });
-      return false;
-    }
+      const profileData = snap.docs[0].data() as Profile;
+      const profileId = snap.docs[0].id;
 
-    const { error } = await supabase
-      .from('user_roles')
-      .insert({
-        user_id: profileData.id,
+      await addDoc(collection(db, 'user_roles'), {
+        user_id: profileId,
         workspace_id: currentWorkspace.id,
         role,
+        created_at: new Date().toISOString(),
       });
 
-    if (error) {
-      console.error('Error adding member:', error);
+      toast({
+        title: 'Miembro agregado',
+        description: `Se agregó a ${profileData.display_name} correctamente`,
+      });
+      return true;
+    } catch (error) {
+      console.error('Error adding member in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo agregar al miembro',
@@ -365,213 +210,141 @@ export function useWorkspaces(profile: Profile | null) {
       });
       return false;
     }
-
-    toast({
-      title: 'Miembro agregado',
-      description: `Se agregó a ${profileData.display_name} como ${role === 'admin' ? 'administrador' : 'colaborador'}`,
-    });
-
-    await fetchWorkspaceMembers();
-    return true;
-  }, [currentWorkspace, workspaceMembers, toast, fetchWorkspaceMembers]);
+  }, [currentWorkspace, toast]);
 
   const removeMember = useCallback(async (userId: string) => {
     if (!currentWorkspace) return false;
 
-    const { error } = await supabase
-      .from('user_roles')
-      .delete()
-      .eq('user_id', userId)
-      .eq('workspace_id', currentWorkspace.id);
+    try {
+      const rolesQuery = query(
+        collection(db, 'user_roles'),
+        where('user_id', '==', userId),
+        where('workspace_id', '==', currentWorkspace.id)
+      );
+      const snap = await getDocs(rolesQuery);
+      for (const d of snap.docs) {
+        await deleteDoc(d.ref);
+      }
 
-    if (error) {
-      console.error('Error removing member:', error);
       toast({
-        title: 'Error',
-        description: 'No se pudo eliminar al miembro',
-        variant: 'destructive',
+        title: 'Miembro eliminado',
       });
+      return true;
+    } catch (error) {
+      console.error('Error removing member:', error);
       return false;
     }
-
-    // Also remove their project assignments
-    await supabase
-      .from('member_project_assignments')
-      .delete()
-      .eq('user_id', userId)
-      .eq('workspace_id', currentWorkspace.id);
-
-    toast({
-      title: 'Miembro eliminado',
-      description: 'Se eliminó al usuario del workspace',
-    });
-
-    await fetchWorkspaceMembers();
-    await fetchMemberProjectAssignments();
-    return true;
-  }, [currentWorkspace, toast, fetchWorkspaceMembers, fetchMemberProjectAssignments]);
+  }, [currentWorkspace, toast]);
 
   const assignProjectToWorkspace = useCallback(async (projectId: string) => {
     if (!currentWorkspace) return false;
 
-    const { error } = await supabase
-      .from('workspace_projects')
-      .insert({
+    try {
+      await addDoc(collection(db, 'workspace_projects'), {
         workspace_id: currentWorkspace.id,
         project_id: projectId,
+        created_at: new Date().toISOString(),
       });
 
-    if (error) {
-      if (error.code === '23505') {
-        toast({
-          title: 'Ya asignado',
-          description: 'Este proyecto ya está asignado al workspace',
-          variant: 'destructive',
-        });
-      } else {
-        console.error('Error assigning project:', error);
-        toast({
-          title: 'Error',
-          description: 'No se pudo asignar el proyecto',
-          variant: 'destructive',
-        });
-      }
+      toast({
+        title: 'Proyecto asignado',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error assigning project in Firestore:', error);
       return false;
     }
-
-    toast({
-      title: 'Proyecto asignado',
-      description: 'El proyecto se asignó al workspace',
-    });
-
-    await fetchWorkspaceProjects();
-    await checkWorkspaceHasData();
-    return true;
-  }, [currentWorkspace, toast, fetchWorkspaceProjects, checkWorkspaceHasData]);
+  }, [currentWorkspace, toast]);
 
   const removeProjectFromWorkspace = useCallback(async (projectId: string) => {
     if (!currentWorkspace) return false;
 
-    const { error } = await supabase
-      .from('workspace_projects')
-      .delete()
-      .eq('workspace_id', currentWorkspace.id)
-      .eq('project_id', projectId);
+    try {
+      const q = query(
+        collection(db, 'workspace_projects'),
+        where('workspace_id', '==', currentWorkspace.id),
+        where('project_id', '==', projectId)
+      );
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        await deleteDoc(d.ref);
+      }
 
-    if (error) {
-      console.error('Error removing project:', error);
       toast({
-        title: 'Error',
-        description: 'No se pudo quitar el proyecto',
-        variant: 'destructive',
+        title: 'Proyecto quitado',
       });
+      return true;
+    } catch (error) {
+      console.error('Error removing project from workspace:', error);
       return false;
     }
-
-    // Also remove member assignments for this project
-    await supabase
-      .from('member_project_assignments')
-      .delete()
-      .eq('workspace_id', currentWorkspace.id)
-      .eq('project_id', projectId);
-
-    await fetchWorkspaceProjects();
-    await fetchMemberProjectAssignments();
-    await checkWorkspaceHasData();
-    return true;
-  }, [currentWorkspace, toast, fetchWorkspaceProjects, fetchMemberProjectAssignments, checkWorkspaceHasData]);
+  }, [currentWorkspace, toast]);
 
   const assignProjectToMember = useCallback(async (userId: string, projectId: string) => {
     if (!currentWorkspace) return false;
 
-    const { error } = await supabase
-      .from('member_project_assignments')
-      .insert({
+    try {
+      await addDoc(collection(db, 'member_project_assignments'), {
         workspace_id: currentWorkspace.id,
         user_id: userId,
         project_id: projectId,
+        created_at: new Date().toISOString(),
       });
 
-    if (error) {
-      if (error.code === '23505') {
-        toast({
-          title: 'Ya asignado',
-          description: 'Este proyecto ya está asignado a este miembro',
-          variant: 'destructive',
-        });
-      } else {
-        console.error('Error assigning project to member:', error);
-        toast({
-          title: 'Error',
-          description: 'No se pudo asignar el proyecto al miembro',
-          variant: 'destructive',
-        });
-      }
+      toast({
+        title: 'Proyecto asignado',
+        description: 'El colaborador ahora puede ver este proyecto',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error assigning project to member:', error);
       return false;
     }
-
-    toast({
-      title: 'Proyecto asignado',
-      description: 'El colaborador ahora puede ver este proyecto',
-    });
-
-    await fetchMemberProjectAssignments();
-    return true;
-  }, [currentWorkspace, toast, fetchMemberProjectAssignments]);
+  }, [currentWorkspace, toast]);
 
   const removeProjectFromMember = useCallback(async (userId: string, projectId: string) => {
     if (!currentWorkspace) return false;
 
-    const { error } = await supabase
-      .from('member_project_assignments')
-      .delete()
-      .eq('workspace_id', currentWorkspace.id)
-      .eq('user_id', userId)
-      .eq('project_id', projectId);
-
-    if (error) {
+    try {
+      const q = query(
+        collection(db, 'member_project_assignments'),
+        where('workspace_id', '==', currentWorkspace.id),
+        where('user_id', '==', userId),
+        where('project_id', '==', projectId)
+      );
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        await deleteDoc(d.ref);
+      }
+      return true;
+    } catch (error) {
       console.error('Error removing project from member:', error);
-      toast({
-        title: 'Error',
-        description: 'No se pudo quitar el proyecto del miembro',
-        variant: 'destructive',
-      });
       return false;
     }
+  }, [currentWorkspace]);
 
-    await fetchMemberProjectAssignments();
-    return true;
-  }, [currentWorkspace, toast, fetchMemberProjectAssignments]);
-
-  // Invitation functions
   const sendInvitation = useCallback(async (email: string, role: AppRole = 'collaborator') => {
     if (!currentWorkspace || !profile) return false;
 
-    // Check if already invited
-    const existingInvite = invitations.find(i => i.email === email && i.status === 'pending');
-    if (existingInvite) {
-      toast({
-        title: 'Ya invitado',
-        description: 'Ya existe una invitación pendiente para este email',
-        variant: 'destructive',
-      });
-      return false;
-    }
-
-    // Create the invitation in database
-    const { data: inviteData, error } = await supabase
-      .from('workspace_invitations')
-      .insert({
+    try {
+      const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+      await addDoc(collection(db, 'workspace_invitations'), {
         workspace_id: currentWorkspace.id,
         email,
         role,
+        token,
+        status: 'pending',
         invited_by: profile.id,
-      })
-      .select()
-      .single();
+        created_at: new Date().toISOString(),
+      });
 
-    if (error) {
-      console.error('Error sending invitation:', error);
+      toast({
+        title: 'Invitación creada',
+        description: `Invitación registrada para ${email}`,
+      });
+      return true;
+    } catch (error) {
+      console.error('Error sending invitation in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo enviar la invitación',
@@ -579,182 +352,88 @@ export function useWorkspaces(profile: Profile | null) {
       });
       return false;
     }
-
-    // Send email via edge function
-    try {
-      const appUrl = window.location.origin;
-      const response = await supabase.functions.invoke('send-invitation-email', {
-        body: {
-          email,
-          workspaceName: currentWorkspace.name,
-          inviterName: profile.display_name,
-          role,
-          token: inviteData.token,
-          appUrl,
-        },
-      });
-
-      if (response.error) {
-        console.error('Error sending email:', response.error);
-        toast({
-          title: 'Invitación creada',
-          description: `Se creó la invitación pero no se pudo enviar el email a ${email}`,
-          variant: 'default',
-        });
-      } else {
-        toast({
-          title: 'Invitación enviada',
-          description: `Se envió un email de invitación a ${email}`,
-        });
-      }
-    } catch (emailError) {
-      console.error('Error calling email function:', emailError);
-      toast({
-        title: 'Invitación creada',
-        description: `Se creó la invitación pero no se pudo enviar el email`,
-        variant: 'default',
-      });
-    }
-
-    await fetchInvitations();
-    return true;
-  }, [currentWorkspace, profile, invitations, toast, fetchInvitations]);
+  }, [currentWorkspace, profile, toast]);
 
   const cancelInvitation = useCallback(async (invitationId: string) => {
-    const { error } = await supabase
-      .from('workspace_invitations')
-      .delete()
-      .eq('id', invitationId);
-
-    if (error) {
-      console.error('Error canceling invitation:', error);
+    try {
+      await deleteDoc(doc(db, 'workspace_invitations', invitationId));
       toast({
-        title: 'Error',
-        description: 'No se pudo cancelar la invitación',
-        variant: 'destructive',
+        title: 'Invitación cancelada',
       });
+      return true;
+    } catch (error) {
+      console.error('Error canceling invitation:', error);
       return false;
     }
+  }, [toast]);
 
-    toast({
-      title: 'Invitación cancelada',
-    });
-
-    await fetchInvitations();
-    return true;
-  }, [toast, fetchInvitations]);
-
-  // Request functions
   const createAccessRequest = useCallback(async () => {
     if (!profile) return false;
 
-    const { error } = await supabase
-      .from('workspace_requests')
-      .insert({
+    try {
+      await addDoc(collection(db, 'workspace_requests'), {
         user_id: profile.id,
+        status: 'pending' as RequestStatus,
+        created_at: new Date().toISOString(),
       });
 
-    if (error) {
-      if (error.code === '23505') {
-        toast({
-          title: 'Solicitud existente',
-          description: 'Ya tienes una solicitud de acceso pendiente',
-          variant: 'destructive',
-        });
-      } else {
-        console.error('Error creating request:', error);
-        toast({
-          title: 'Error',
-          description: 'No se pudo crear la solicitud',
-          variant: 'destructive',
-        });
-      }
+      toast({
+        title: 'Solicitud enviada',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error creating request:', error);
       return false;
     }
-
-    toast({
-      title: 'Solicitud enviada',
-      description: 'Un administrador revisará tu solicitud',
-    });
-
-    await fetchMyRequest();
-    return true;
-  }, [profile, toast, fetchMyRequest]);
+  }, [profile, toast]);
 
   const approveRequest = useCallback(async (requestId: string, workspaceId: string, userId: string) => {
     if (!profile) return false;
 
-    // First update the request
-    const { error: updateError } = await supabase
-      .from('workspace_requests')
-      .update({
+    try {
+      await updateDoc(doc(db, 'workspace_requests', requestId), {
         status: 'approved' as RequestStatus,
         reviewed_by: profile.id,
         assigned_workspace_id: workspaceId,
-      })
-      .eq('id', requestId);
-
-    if (updateError) {
-      console.error('Error approving request:', updateError);
-      toast({
-        title: 'Error',
-        description: 'No se pudo aprobar la solicitud',
-        variant: 'destructive',
+        updated_at: new Date().toISOString(),
       });
-      return false;
-    }
 
-    // Add user to workspace as collaborator
-    const { error: roleError } = await supabase
-      .from('user_roles')
-      .insert({
+      await addDoc(collection(db, 'user_roles'), {
         user_id: userId,
         workspace_id: workspaceId,
         role: 'collaborator' as AppRole,
+        created_at: new Date().toISOString(),
       });
 
-    if (roleError) {
-      console.error('Error adding user role:', roleError);
+      toast({
+        title: 'Solicitud aprobada',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error approving request in Firestore:', error);
+      return false;
     }
-
-    toast({
-      title: 'Solicitud aprobada',
-      description: 'El usuario ha sido agregado al workspace',
-    });
-
-    await fetchPendingRequests();
-    await fetchWorkspaceMembers();
-    return true;
-  }, [profile, toast, fetchPendingRequests, fetchWorkspaceMembers]);
+  }, [profile, toast]);
 
   const rejectRequest = useCallback(async (requestId: string) => {
     if (!profile) return false;
 
-    const { error } = await supabase
-      .from('workspace_requests')
-      .update({
+    try {
+      await updateDoc(doc(db, 'workspace_requests', requestId), {
         status: 'rejected' as RequestStatus,
         reviewed_by: profile.id,
-      })
-      .eq('id', requestId);
-
-    if (error) {
-      console.error('Error rejecting request:', error);
-      toast({
-        title: 'Error',
-        description: 'No se pudo rechazar la solicitud',
-        variant: 'destructive',
+        updated_at: new Date().toISOString(),
       });
+
+      toast({
+        title: 'Solicitud rechazada',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error rejecting request in Firestore:', error);
       return false;
     }
-
-    toast({
-      title: 'Solicitud rechazada',
-    });
-
-    await fetchPendingRequests();
-    return true;
-  }, [profile, toast, fetchPendingRequests]);
+  }, [profile, toast]);
 
   const selectWorkspace = useCallback((workspace: Workspace) => {
     setCurrentWorkspace(workspace);
@@ -789,9 +468,9 @@ export function useWorkspaces(profile: Profile | null) {
     approveRequest,
     rejectRequest,
     selectWorkspace,
-    refetchMembers: fetchWorkspaceMembers,
-    refetchProjects: fetchWorkspaceProjects,
-    refetchInvitations: fetchInvitations,
-    refetchRequests: fetchPendingRequests,
+    refetchMembers: () => {},
+    refetchProjects: () => {},
+    refetchInvitations: () => {},
+    refetchRequests: () => {},
   };
 }

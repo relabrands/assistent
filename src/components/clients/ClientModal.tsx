@@ -12,7 +12,8 @@ import { Label } from '@/components/ui/label';
 
 import { Client } from '@/types/content';
 import { Trash2, Upload, Globe, Instagram, Linkedin, Youtube } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '@/integrations/firebase/client';
 import { toast } from 'sonner';
 
 interface ClientModalProps {
@@ -86,19 +87,12 @@ export function ClientModal({
 
     setUploading(true);
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${crypto.randomUUID()}.${fileExt}`;
-      const filePath = `logos/${fileName}`;
+      const fileExt = file.name.split('.').pop() || 'png';
+      const fileName = `logos/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const storageRef = ref(storage, fileName);
 
-      const { error: uploadError } = await supabase.storage
-        .from('content-files')
-        .upload(filePath, file);
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('content-files')
-        .getPublicUrl(filePath);
+      await uploadBytes(storageRef, file);
+      const publicUrl = await getDownloadURL(storageRef);
 
       setLogoUrl(publicUrl);
       toast.success('Logo subido correctamente');

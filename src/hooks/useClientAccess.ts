@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  deleteDoc, 
+  updateDoc, 
+  onSnapshot, 
+  query, 
+  where, 
+  getDocs 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Profile } from '@/types/database';
 import { toast } from 'sonner';
 
@@ -20,99 +30,49 @@ export function useClientAccess(clientId: string | null) {
   const [accessRecords, setAccessRecords] = useState<ClientAccessRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchAccess = useCallback(async () => {
+  useEffect(() => {
     if (!clientId) {
       setAccessRecords([]);
       setLoading(false);
       return;
     }
 
-    try {
-      setLoading(true);
+    setLoading(true);
+
+    const q = query(
+      collection(db, 'client_access'),
+      where('client_id', '==', clientId)
+    );
+
+    const unsubscribe = onSnapshot(q, async (snap) => {
+      const recordsData = snap.docs.map(d => ({ id: d.id, ...d.data() } as ClientAccessRecord));
       
-      // Fetch access records for this client
-      const { data: accessData, error: accessError } = await supabase
-        .from('client_access')
-        .select('*')
-        .eq('client_id', clientId)
-        .order('created_at', { ascending: false });
+      try {
+        const profSnap = await getDocs(collection(db, 'profiles'));
+        const profileMap = new Map(profSnap.docs.map(d => [d.id, { id: d.id, ...d.data() } as Profile]));
 
-      if (accessError) throw accessError;
+        const combined = recordsData.map(r => ({
+          ...r,
+          user_profile: profileMap.get(r.user_id),
+          granter_profile: profileMap.get(r.granted_by),
+        }));
 
-      if (!accessData || accessData.length === 0) {
-        setAccessRecords([]);
-        setLoading(false);
-        return;
+        setAccessRecords(combined);
+      } catch {
+        setAccessRecords(recordsData);
       }
-
-      // Get unique user IDs and granter IDs
-      const userIds = [...new Set(accessData.map(a => a.user_id))];
-      const granterIds = [...new Set(accessData.map(a => a.granted_by))];
-      const allProfileIds = [...new Set([...userIds, ...granterIds])];
-
-      // Fetch all profiles
-      const { data: profiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('*')
-        .in('id', allProfileIds);
-
-      if (profilesError) throw profilesError;
-
-      const profileMap = new Map((profiles || []).map(p => [p.id, p]));
-
-      // Combine data
-      const records: ClientAccessRecord[] = accessData.map(access => ({
-        ...access,
-        role: (access.role as ClientAccessRole) || 'viewer',
-        user_profile: profileMap.get(access.user_id),
-        granter_profile: profileMap.get(access.granted_by),
-      }));
-
-      setAccessRecords(records);
-    } catch (error) {
-      console.error('Error fetching client access:', error);
-      toast.error('Error al cargar accesos del cliente');
-    } finally {
       setLoading(false);
-    }
+    }, (error) => {
+      console.error('Error fetching client access:', error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [clientId]);
-
-  useEffect(() => {
-    fetchAccess();
-
-    if (!clientId) return;
-
-    // Set up realtime subscription
-    const channel = supabase
-      .channel(`client_access_${clientId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'client_access',
-          filter: `client_id=eq.${clientId}`,
-        },
-        () => {
-          fetchAccess();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [fetchAccess, clientId]);
 
   const revokeAccess = useCallback(async (accessId: string) => {
     try {
-      const { error } = await supabase
-        .from('client_access')
-        .delete()
-        .eq('id', accessId);
-
-      if (error) throw error;
-
+      await deleteDoc(doc(db, 'client_access', accessId));
       toast.success('Acceso revocado correctamente');
       return true;
     } catch (error) {
@@ -124,13 +84,10 @@ export function useClientAccess(clientId: string | null) {
 
   const updateRole = useCallback(async (accessId: string, newRole: ClientAccessRole) => {
     try {
-      const { error } = await supabase
-        .from('client_access')
-        .update({ role: newRole })
-        .eq('id', accessId);
-
-      if (error) throw error;
-
+      await updateDoc(doc(db, 'client_access', accessId), {
+        role: newRole,
+        updated_at: new Date().toISOString(),
+      });
       toast.success(`Rol actualizado a ${newRole === 'approver' ? 'Aprobador' : 'Solo lectura'}`);
       return true;
     } catch (error) {
@@ -145,6 +102,6 @@ export function useClientAccess(clientId: string | null) {
     loading,
     revokeAccess,
     updateRole,
-    refetch: fetchAccess,
+    refetch: () => {},
   };
 }

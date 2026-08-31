@@ -1,5 +1,7 @@
 import { useState, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { doc, updateDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { auth, db, storage } from '@/integrations/firebase/client';
 import { Profile } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
 
@@ -11,44 +13,41 @@ export function useProfile(profile: Profile | null, onProfileUpdate?: (profile: 
     if (!profile) return false;
 
     setLoading(true);
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({ display_name: displayName })
-      .eq('id', profile.id)
-      .select()
-      .single();
+    try {
+      const profileRef = doc(db, 'profiles', profile.id);
+      await updateDoc(profileRef, {
+        display_name: displayName,
+        updated_at: new Date().toISOString(),
+      });
 
-    setLoading(false);
+      const updatedProfile = { ...profile, display_name: displayName, updated_at: new Date().toISOString() };
+      if (onProfileUpdate) {
+        onProfileUpdate(updatedProfile);
+      }
 
-    if (error) {
-      console.error('Error updating display name:', error);
+      toast({
+        title: 'Nombre actualizado',
+        description: 'Tu nombre de perfil ha sido actualizado',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error updating display name in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo actualizar el nombre',
         variant: 'destructive',
       });
       return false;
+    } finally {
+      setLoading(false);
     }
-
-    toast({
-      title: 'Nombre actualizado',
-      description: 'Tu nombre de perfil ha sido actualizado',
-    });
-
-    if (onProfileUpdate && data) {
-      onProfileUpdate(data as Profile);
-    }
-
-    return true;
   }, [profile, toast, onProfileUpdate]);
 
   const uploadAvatar = useCallback(async (file: File) => {
     if (!profile) return null;
 
     setLoading(true);
-
-    // Get the user's auth id for the folder path
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = auth.currentUser;
     if (!user) {
       setLoading(false);
       toast({
@@ -59,119 +58,88 @@ export function useProfile(profile: Profile | null, onProfileUpdate?: (profile: 
       return null;
     }
 
-    // Create file path: user_auth_id/avatar.ext
-    const fileExt = file.name.split('.').pop();
-    const fileName = `avatar.${fileExt}`;
-    const filePath = `${user.id}/${fileName}`;
+    const fileExt = file.name.split('.').pop() || 'png';
+    const filePath = `avatars/${user.uid}/avatar.${fileExt}`;
+    const storageRef = ref(storage, filePath);
 
-    // Delete existing avatar first if exists
-    if (profile.avatar_url) {
-      const oldPath = profile.avatar_url.split('/avatars/')[1];
-      if (oldPath) {
-        await supabase.storage.from('avatars').remove([oldPath]);
+    try {
+      await uploadBytes(storageRef, file);
+      const publicUrl = await getDownloadURL(storageRef);
+
+      const profileRef = doc(db, 'profiles', profile.id);
+      await updateDoc(profileRef, {
+        avatar_url: publicUrl,
+        updated_at: new Date().toISOString(),
+      });
+
+      const updatedProfile = { ...profile, avatar_url: publicUrl, updated_at: new Date().toISOString() };
+      if (onProfileUpdate) {
+        onProfileUpdate(updatedProfile);
       }
-    }
 
-    // Upload new avatar
-    const { error: uploadError } = await supabase.storage
-      .from('avatars')
-      .upload(filePath, file, { upsert: true });
+      toast({
+        title: 'Avatar actualizado',
+        description: 'Tu foto de perfil ha sido actualizada',
+      });
 
-    if (uploadError) {
-      console.error('Error uploading avatar:', uploadError);
-      setLoading(false);
+      return publicUrl;
+    } catch (error) {
+      console.error('Error uploading avatar to Firebase Storage:', error);
       toast({
         title: 'Error',
         description: 'No se pudo subir la imagen',
         variant: 'destructive',
       });
       return null;
+    } finally {
+      setLoading(false);
     }
-
-    // Get public URL
-    const { data: { publicUrl } } = supabase.storage
-      .from('avatars')
-      .getPublicUrl(filePath);
-
-    // Update profile with avatar URL
-    const { data, error: updateError } = await supabase
-      .from('profiles')
-      .update({ avatar_url: publicUrl })
-      .eq('id', profile.id)
-      .select()
-      .single();
-
-    setLoading(false);
-
-    if (updateError) {
-      console.error('Error updating avatar URL:', updateError);
-      toast({
-        title: 'Error',
-        description: 'No se pudo guardar la URL del avatar',
-        variant: 'destructive',
-      });
-      return null;
-    }
-
-    toast({
-      title: 'Avatar actualizado',
-      description: 'Tu foto de perfil ha sido actualizada',
-    });
-
-    if (onProfileUpdate && data) {
-      onProfileUpdate(data as Profile);
-    }
-
-    return publicUrl;
   }, [profile, toast, onProfileUpdate]);
 
   const removeAvatar = useCallback(async () => {
     if (!profile || !profile.avatar_url) return false;
 
     setLoading(true);
-
-    // Get the user's auth id
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = auth.currentUser;
     if (!user) {
       setLoading(false);
       return false;
     }
 
-    // Delete from storage
-    const filePath = profile.avatar_url.split('/avatars/')[1];
-    if (filePath) {
-      await supabase.storage.from('avatars').remove([filePath]);
-    }
+    try {
+      const storageRef = ref(storage, `avatars/${user.uid}/avatar.png`);
+      try {
+        await deleteObject(storageRef);
+      } catch (delErr) {
+        console.warn('Avatar delete error (may not exist):', delErr);
+      }
 
-    // Update profile
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({ avatar_url: null })
-      .eq('id', profile.id)
-      .select()
-      .single();
+      const profileRef = doc(db, 'profiles', profile.id);
+      await updateDoc(profileRef, {
+        avatar_url: null,
+        updated_at: new Date().toISOString(),
+      });
 
-    setLoading(false);
+      const updatedProfile = { ...profile, avatar_url: null, updated_at: new Date().toISOString() };
+      if (onProfileUpdate) {
+        onProfileUpdate(updatedProfile);
+      }
 
-    if (error) {
-      console.error('Error removing avatar:', error);
+      toast({
+        title: 'Avatar eliminado',
+      });
+      return true;
+    } catch (error) {
+      console.error('Error removing avatar in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo eliminar el avatar',
         variant: 'destructive',
       });
       return false;
+    } finally {
+      setLoading(false);
     }
-
-    toast({
-      title: 'Avatar eliminado',
-    });
-
-    if (onProfileUpdate && data) {
-      onProfileUpdate(data as Profile);
-    }
-
-    return true;
   }, [profile, toast, onProfileUpdate]);
 
   return {

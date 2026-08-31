@@ -1,5 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { ContentComment } from '@/types/content';
 import { Profile } from '@/types/database';
 import { toast } from 'sonner';
@@ -12,59 +21,33 @@ export function useContentComments(profile: Profile | null, contentId: string | 
   const [comments, setComments] = useState<ContentCommentWithAuthor[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchComments = useCallback(async () => {
+  useEffect(() => {
     if (!profile || !contentId) {
       setComments([]);
       setLoading(false);
       return;
     }
 
-    try {
-      const { data, error } = await supabase
-        .from('content_comments')
-        .select(`
-          *,
-          author:profiles!content_comments_author_id_fkey(*)
-        `)
-        .eq('content_id', contentId)
-        .order('created_at', { ascending: true });
+    setLoading(true);
 
-      if (error) throw error;
-      setComments((data || []) as ContentCommentWithAuthor[]);
-    } catch (error) {
-      console.error('Error fetching comments:', error);
-      toast.error('Error al cargar comentarios');
-    } finally {
+    const commentsQuery = query(
+      collection(db, 'content_comments'),
+      where('content_id', '==', contentId)
+    );
+
+    const unsubscribe = onSnapshot(commentsQuery, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ContentCommentWithAuthor));
+      items.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+      setComments(items);
       setLoading(false);
-    }
+    }, (error) => {
+      console.error('Error fetching comments from Firestore:', error);
+      toast.error('Error al cargar comentarios');
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [profile, contentId]);
-
-  useEffect(() => {
-    fetchComments();
-
-    if (!contentId) return;
-
-    // Set up realtime subscription
-    const channel = supabase
-      .channel(`content_comments_${contentId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'content_comments',
-          filter: `content_id=eq.${contentId}`,
-        },
-        () => {
-          fetchComments();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [fetchComments, contentId]);
 
   const addComment = useCallback(async (commentData: {
     content_id: string;
@@ -75,20 +58,17 @@ export function useContentComments(profile: Profile | null, contentId: string | 
     if (!profile) return null;
 
     try {
-      const { data, error } = await supabase
-        .from('content_comments')
-        .insert({
-          ...commentData,
-          author_id: profile.id,
-        })
-        .select()
-        .single();
+      const newComment = {
+        ...commentData,
+        author_id: profile.id,
+        created_at: new Date().toISOString(),
+        author: profile,
+      };
 
-      if (error) throw error;
-
-      return data as ContentComment;
+      const docRef = await addDoc(collection(db, 'content_comments'), newComment);
+      return { id: docRef.id, ...newComment } as ContentComment;
     } catch (error) {
-      console.error('Error creating comment:', error);
+      console.error('Error creating comment in Firestore:', error);
       toast.error('Error al crear comentario');
       return null;
     }
@@ -96,17 +76,11 @@ export function useContentComments(profile: Profile | null, contentId: string | 
 
   const deleteComment = useCallback(async (id: string) => {
     try {
-      const { error } = await supabase
-        .from('content_comments')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-
+      await deleteDoc(doc(db, 'content_comments', id));
       toast.success('Comentario eliminado');
       return true;
     } catch (error) {
-      console.error('Error deleting comment:', error);
+      console.error('Error deleting comment in Firestore:', error);
       toast.error('Error al eliminar comentario');
       return false;
     }
@@ -117,6 +91,6 @@ export function useContentComments(profile: Profile | null, contentId: string | 
     loading,
     addComment,
     deleteComment,
-    refetch: fetchComments,
+    refetch: () => {},
   };
 }

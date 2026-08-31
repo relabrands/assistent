@@ -1,11 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { User, Session } from '@supabase/supabase-js';
+import { 
+  User as FirebaseUser,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  updateProfile as firebaseUpdateProfile
+} from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db } from '@/integrations/firebase/client';
 import { Profile } from '@/types/database';
 
 interface AuthState {
-  user: User | null;
-  session: Session | null;
+  user: FirebaseUser | null;
+  session: { user: FirebaseUser } | null;
   profile: Profile | null;
   loading: boolean;
 }
@@ -18,72 +26,122 @@ export function useAuth() {
     loading: true,
   });
 
-  const fetchProfile = useCallback(async (userId: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
-    return data as Profile | null;
+  const fetchOrCreateProfile = useCallback(async (firebaseUser: FirebaseUser, displayName?: string) => {
+    try {
+      const profileRef = doc(db, 'profiles', firebaseUser.uid);
+      const profileSnap = await getDoc(profileRef);
+
+      if (profileSnap.exists()) {
+        const data = profileSnap.data();
+        return {
+          id: firebaseUser.uid,
+          user_id: firebaseUser.uid,
+          display_name: data.display_name || firebaseUser.displayName || 'Usuario',
+          email: data.email || firebaseUser.email,
+          avatar_url: data.avatar_url || firebaseUser.photoURL || null,
+          created_at: data.created_at || new Date().toISOString(),
+          updated_at: data.updated_at || new Date().toISOString(),
+        } as Profile;
+      }
+
+      // If profile does not exist yet, create it
+      const newProfile: Profile = {
+        id: firebaseUser.uid,
+        user_id: firebaseUser.uid,
+        display_name: displayName || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Usuario',
+        email: firebaseUser.email || null,
+        avatar_url: firebaseUser.photoURL || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      await setDoc(profileRef, newProfile);
+      return newProfile;
+    } catch (error) {
+      console.error('Error fetching/creating profile in Firestore:', error);
+      return {
+        id: firebaseUser.uid,
+        user_id: firebaseUser.uid,
+        display_name: displayName || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Usuario',
+        email: firebaseUser.email || null,
+        avatar_url: firebaseUser.photoURL || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as Profile;
+    }
   }, []);
 
   useEffect(() => {
-    // Set up auth state listener FIRST
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        const user = session?.user ?? null;
-        let profile: Profile | null = null;
-
-        if (user) {
-          // Use setTimeout to avoid potential race conditions
-          setTimeout(async () => {
-            profile = await fetchProfile(user.id);
-            setAuthState({ user, session, profile, loading: false });
-          }, 0);
-        } else {
-          setAuthState({ user: null, session: null, profile: null, loading: false });
-        }
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        const profile = await fetchOrCreateProfile(currentUser);
+        setAuthState({
+          user: currentUser,
+          session: { user: currentUser },
+          profile,
+          loading: false,
+        });
+      } else {
+        setAuthState({
+          user: null,
+          session: null,
+          profile: null,
+          loading: false,
+        });
       }
-    );
-
-    // THEN check for existing session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      const user = session?.user ?? null;
-      let profile: Profile | null = null;
-
-      if (user) {
-        profile = await fetchProfile(user.id);
-      }
-
-      setAuthState({ user, session, profile, loading: false });
     });
 
-    return () => subscription.unsubscribe();
-  }, [fetchProfile]);
+    return () => unsubscribe();
+  }, [fetchOrCreateProfile]);
 
   const signUp = async (email: string, password: string, displayName: string) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: window.location.origin,
-        data: { display_name: displayName },
-      },
-    });
-    return { data, error };
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      if (displayName && userCredential.user) {
+        await firebaseUpdateProfile(userCredential.user, { displayName });
+      }
+      const profile = await fetchOrCreateProfile(userCredential.user, displayName);
+      setAuthState({
+        user: userCredential.user,
+        session: { user: userCredential.user },
+        profile,
+        loading: false,
+      });
+      return { data: { user: userCredential.user }, error: null };
+    } catch (error: any) {
+      return { data: null, error };
+    }
   };
 
   const signIn = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    return { data, error };
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const profile = await fetchOrCreateProfile(userCredential.user);
+      setAuthState({
+        user: userCredential.user,
+        session: { user: userCredential.user },
+        profile,
+        loading: false,
+      });
+      return { data: { user: userCredential.user }, error: null };
+    } catch (error: any) {
+      return { data: null, error };
+    }
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    return { error };
+    try {
+      await firebaseSignOut(auth);
+      setAuthState({
+        user: null,
+        session: null,
+        profile: null,
+        loading: false,
+      });
+      return { error: null };
+    } catch (error: any) {
+      return { error };
+    }
   };
 
   return {

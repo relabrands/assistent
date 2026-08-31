@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Project, SectorType, Profile, Workspace } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
 
@@ -8,77 +18,37 @@ export function useProjects(profile: Profile | null, currentWorkspace: Workspace
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
-  const fetchProjects = useCallback(async () => {
+  useEffect(() => {
     if (!profile) {
+      setProjects([]);
       setLoading(false);
       return;
     }
 
-    // If we have a workspace, fetch only projects assigned to this workspace
-    if (currentWorkspace) {
-      const { data, error } = await supabase
-        .from('workspace_projects')
-        .select(`
-          project:projects(*)
-        `)
-        .eq('workspace_id', currentWorkspace.id);
+    setLoading(true);
 
-      if (error) {
-        console.error('Error fetching workspace projects:', error);
-        setProjects([]);
+    const projectsQuery = query(collection(db, 'projects'));
+    const unsubscribe = onSnapshot(projectsQuery, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Project));
+      
+      // Filter by workspace if present, or by owner
+      let filtered = items;
+      if (currentWorkspace?.id) {
+        filtered = items.filter(p => (p as any).workspace_id === currentWorkspace.id || p.owner_id === profile.id);
       } else {
-        // Extract projects from the nested structure
-        const projectsData = data
-          ?.map(wp => wp.project)
-          .filter(Boolean) as Project[];
-        setProjects(projectsData || []);
+        filtered = items.filter(p => p.owner_id === profile.id);
       }
-    } else {
-      // No workspace selected - show projects owned by user that aren't in any workspace
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('owner_id', profile.id)
-        .order('name');
+      
+      filtered.sort((a, b) => a.name.localeCompare(b.name));
+      setProjects(filtered);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching projects from Firestore:', error);
+      setLoading(false);
+    });
 
-      if (error) {
-        console.error('Error fetching projects:', error);
-      } else {
-        setProjects(data as Project[]);
-      }
-    }
-    setLoading(false);
+    return () => unsubscribe();
   }, [profile, currentWorkspace]);
-
-  useEffect(() => {
-    if (!profile) return;
-
-    fetchProjects();
-
-    // Subscribe to both projects and workspace_projects changes
-    const projectsChannel = supabase
-      .channel('projects-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'projects' },
-        () => fetchProjects()
-      )
-      .subscribe();
-
-    const workspaceProjectsChannel = supabase
-      .channel('workspace-projects-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'workspace_projects' },
-        () => fetchProjects()
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(projectsChannel);
-      supabase.removeChannel(workspaceProjectsChannel);
-    };
-  }, [profile, currentWorkspace, fetchProjects]);
 
   const addProject = useCallback(async (projectData: {
     name: string;
@@ -88,50 +58,38 @@ export function useProjects(profile: Profile | null, currentWorkspace: Workspace
   }) => {
     if (!profile) return;
 
-    // Create the project
-    const { data: newProject, error } = await supabase
-      .from('projects')
-      .insert({
+    try {
+      const newProj = {
         ...projectData,
         owner_id: profile.id,
-      })
-      .select()
-      .single();
+        workspace_id: currentWorkspace?.id || null,
+        uses_clients: false,
+        uses_content_calendar: false,
+        allows_client_access: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-    if (error) {
+      await addDoc(collection(db, 'projects'), newProj);
+      toast({ title: 'Proyecto creado' });
+    } catch (error) {
+      console.error('Error creating project in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo crear el proyecto',
         variant: 'destructive',
       });
-      return;
     }
-
-    // If we have a current workspace, auto-assign the project to it
-    if (currentWorkspace && newProject) {
-      const { error: assignError } = await supabase
-        .from('workspace_projects')
-        .insert({
-          workspace_id: currentWorkspace.id,
-          project_id: newProject.id,
-        });
-
-      if (assignError) {
-        console.error('Error assigning project to workspace:', assignError);
-      }
-    }
-
-    toast({ title: 'Proyecto creado' });
-    await fetchProjects();
-  }, [profile, currentWorkspace, toast, fetchProjects]);
+  }, [profile, currentWorkspace, toast]);
 
   const updateProject = useCallback(async (id: string, updates: Partial<Project>) => {
-    const { error } = await supabase
-      .from('projects')
-      .update(updates)
-      .eq('id', id);
-
-    if (error) {
+    try {
+      await updateDoc(doc(db, 'projects', id), {
+        ...updates,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error('Error updating project in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo actualizar el proyecto',
@@ -141,19 +99,16 @@ export function useProjects(profile: Profile | null, currentWorkspace: Workspace
   }, [toast]);
 
   const deleteProject = useCallback(async (id: string) => {
-    const { error } = await supabase
-      .from('projects')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
+    try {
+      await deleteDoc(doc(db, 'projects', id));
+      toast({ title: 'Proyecto eliminado' });
+    } catch (error) {
+      console.error('Error deleting project in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo eliminar el proyecto',
         variant: 'destructive',
       });
-    } else {
-      toast({ title: 'Proyecto eliminado' });
     }
   }, [toast]);
 
@@ -163,6 +118,6 @@ export function useProjects(profile: Profile | null, currentWorkspace: Workspace
     addProject,
     updateProject,
     deleteProject,
-    refetch: fetchProjects,
+    refetch: () => {},
   };
 }

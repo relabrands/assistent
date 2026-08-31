@@ -1,7 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  updateDoc, 
+  addDoc, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Profile, WorkspaceInvitation, Workspace, ROLE_LABELS } from '@/types/database';
 import { Mail, Check, X, Loader2, Building2 } from 'lucide-react';
@@ -25,22 +34,33 @@ export function MyInvitationsSection({ profile }: MyInvitationsSectionProps) {
     if (!profile?.email) return;
 
     setLoading(true);
-    const { data, error } = await supabase
-      .from('workspace_invitations')
-      .select(`
-        *,
-        workspace:workspaces(*)
-      `)
-      .eq('email', profile.email)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
+    try {
+      const q = query(
+        collection(db, 'workspace_invitations'),
+        where('email', '==', profile.email),
+        where('status', '==', 'pending')
+      );
+      const snap = await getDocs(q);
+      const invs: InvitationWithWorkspace[] = [];
 
-    if (error) {
-      console.error('Error fetching invitations:', error);
-    } else {
-      setInvitations(data as unknown as InvitationWithWorkspace[]);
+      for (const d of snap.docs) {
+        const invData = { id: d.id, ...d.data() } as WorkspaceInvitation;
+        let wsData: Workspace | undefined;
+        if (invData.workspace_id) {
+          const wsSnap = await getDoc(doc(db, 'workspaces', invData.workspace_id));
+          if (wsSnap.exists()) {
+            wsData = { id: wsSnap.id, ...wsSnap.data() } as Workspace;
+          }
+        }
+        invs.push({ ...invData, workspace: wsData });
+      }
+
+      setInvitations(invs);
+    } catch (error) {
+      console.error('Error fetching invitations in Firestore:', error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [profile?.email]);
 
   useEffect(() => {
@@ -53,41 +73,23 @@ export function MyInvitationsSection({ profile }: MyInvitationsSectionProps) {
     setProcessingId(invitation.id);
     
     try {
-      // Check if already a member
-      const { data: existingRole } = await supabase
-        .from('user_roles')
-        .select('id')
-        .eq('user_id', profile.id)
-        .eq('workspace_id', invitation.workspace_id)
-        .maybeSingle();
+      await addDoc(collection(db, 'user_roles'), {
+        user_id: profile.id,
+        workspace_id: invitation.workspace_id,
+        role: invitation.role,
+        created_at: new Date().toISOString(),
+      });
 
-      if (!existingRole) {
-        // Add user to workspace
-        const { error: roleError } = await supabase
-          .from('user_roles')
-          .insert({
-            user_id: profile.id,
-            workspace_id: invitation.workspace_id,
-            role: invitation.role,
-          });
-
-        if (roleError) {
-          throw roleError;
-        }
-      }
-
-      // Mark invitation as accepted
-      await supabase
-        .from('workspace_invitations')
-        .update({ status: 'accepted' })
-        .eq('id', invitation.id);
+      await updateDoc(doc(db, 'workspace_invitations', invitation.id), {
+        status: 'accepted',
+        updated_at: new Date().toISOString(),
+      });
 
       toast({
         title: '¡Bienvenido!',
         description: `Te uniste a ${invitation.workspace?.name}`,
       });
 
-      // Refresh
       window.location.reload();
     } catch (err) {
       console.error('Error accepting invitation:', err);
@@ -104,33 +106,29 @@ export function MyInvitationsSection({ profile }: MyInvitationsSectionProps) {
   const declineInvitation = async (invitationId: string) => {
     setProcessingId(invitationId);
     
-    const { error } = await supabase
-      .from('workspace_invitations')
-      .update({ status: 'declined' })
-      .eq('id', invitationId);
+    try {
+      await updateDoc(doc(db, 'workspace_invitations', invitationId), {
+        status: 'declined',
+        updated_at: new Date().toISOString(),
+      });
 
-    if (error) {
+      toast({
+        title: 'Invitación rechazada',
+      });
+      await fetchMyInvitations();
+    } catch (error) {
       console.error('Error declining invitation:', error);
       toast({
         title: 'Error',
         description: 'No se pudo rechazar la invitación',
         variant: 'destructive',
       });
-    } else {
-      toast({
-        title: 'Invitación rechazada',
-      });
-      await fetchMyInvitations();
+    } finally {
+      setProcessingId(null);
     }
-    
-    setProcessingId(null);
   };
 
-  if (loading) {
-    return null;
-  }
-
-  if (invitations.length === 0) {
+  if (loading || invitations.length === 0) {
     return null;
   }
 

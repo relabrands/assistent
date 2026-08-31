@@ -1,5 +1,15 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { useToast } from '@/hooks/use-toast';
 import {
   StoreProduct,
@@ -8,11 +18,6 @@ import {
   StorePurchase,
   ProductWithDetails,
   FinancialSummary,
-  ProductCategory,
-  ProductStatus,
-  ShippingStatus,
-  SaleStatus,
-  PaymentMethod,
 } from '@/types/store';
 
 export function useStore(profileId: string | undefined) {
@@ -23,59 +28,54 @@ export function useStore(profileId: string | undefined) {
   const [purchases, setPurchases] = useState<StorePurchase[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Fetch all store data
-  const fetchStoreData = useCallback(async () => {
-    if (!profileId) return;
+  useEffect(() => {
+    if (!profileId) {
+      setProducts([]);
+      setShippingCosts([]);
+      setSales([]);
+      setPurchases([]);
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
-    try {
-      const [productsRes, shippingRes, salesRes, purchasesRes] = await Promise.all([
-        supabase
-          .from('store_products')
-          .select('*')
-          .eq('user_id', profileId)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('store_shipping_costs')
-          .select('*')
-          .eq('user_id', profileId)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('store_sales')
-          .select('*')
-          .eq('user_id', profileId)
-          .order('sale_date', { ascending: false }),
-        supabase
-          .from('store_purchases')
-          .select('*')
-          .eq('user_id', profileId)
-          .order('created_at', { ascending: false }),
-      ]);
 
-      if (productsRes.error) throw productsRes.error;
-      if (shippingRes.error) throw shippingRes.error;
-      if (salesRes.error) throw salesRes.error;
-      if (purchasesRes.error) throw purchasesRes.error;
+    const qProducts = query(collection(db, 'store_products'), where('user_id', '==', profileId));
+    const qShipping = query(collection(db, 'store_shipping_costs'), where('user_id', '==', profileId));
+    const qSales = query(collection(db, 'store_sales'), where('user_id', '==', profileId));
+    const qPurchases = query(collection(db, 'store_purchases'), where('user_id', '==', profileId));
 
-      setProducts((productsRes.data || []) as StoreProduct[]);
-      setShippingCosts((shippingRes.data || []) as StoreShippingCost[]);
-      setSales((salesRes.data || []) as StoreSale[]);
-      setPurchases((purchasesRes.data || []) as StorePurchase[]);
-    } catch (error: any) {
-      console.error('Error fetching store data:', error);
-      toast({
-        title: 'Error',
-        description: 'No se pudieron cargar los datos de la tienda',
-        variant: 'destructive',
-      });
-    } finally {
+    const unsubProducts = onSnapshot(qProducts, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as StoreProduct));
+      items.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      setProducts(items);
       setLoading(false);
-    }
-  }, [profileId, toast]);
+    });
 
-  useEffect(() => {
-    fetchStoreData();
-  }, [fetchStoreData]);
+    const unsubShipping = onSnapshot(qShipping, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as StoreShippingCost));
+      setShippingCosts(items);
+    });
+
+    const unsubSales = onSnapshot(qSales, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as StoreSale));
+      items.sort((a, b) => new Date(b.sale_date || 0).getTime() - new Date(a.sale_date || 0).getTime());
+      setSales(items);
+    });
+
+    const unsubPurchases = onSnapshot(qPurchases, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as StorePurchase));
+      items.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      setPurchases(items);
+    });
+
+    return () => {
+      unsubProducts();
+      unsubShipping();
+      unsubSales();
+      unsubPurchases();
+    };
+  }, [profileId]);
 
   // Products with calculated fields
   const productsWithDetails = useMemo((): ProductWithDetails[] => {
@@ -83,69 +83,21 @@ export function useStore(profileId: string | undefined) {
       const productShipping = shippingCosts.filter((s) => s.product_id === product.id);
       const productSales = sales.filter((s) => s.product_id === product.id);
       const productPurchases = purchases.filter((p) => p.product_id === product.id);
-      
-      const exchangeRate = Number(product.exchange_rate) || 1;
-      const saleCurrency = product.sale_currency || 'DOP';
-      const costCurrency = product.cost_currency || 'USD';
-      
-      // Helper to convert to sale currency
-      const convertToSale = (amount: number, fromCurrency: string): number => {
-        if (fromCurrency === saleCurrency) return amount;
-        if (fromCurrency === 'USD' && saleCurrency === 'DOP') return amount * exchangeRate;
-        if (fromCurrency === 'DOP' && saleCurrency === 'USD') return amount / exchangeRate;
-        return amount;
-      };
-      
-      // Purchases (weighted average cost per unit, converted to sale currency)
-      const totalPurchasedQty = productPurchases.reduce((sum, p) => sum + (Number(p.quantity) || 0), 0);
-      const totalPurchasesConverted = productPurchases.reduce((sum, p) => {
-        const fromCurrency = (p.cost_currency || costCurrency) as string;
-        const unit = Number(p.unit_cost) || 0;
-        const qty = Number(p.quantity) || 0;
-        // For purchases, conversion should use the purchase exchange_rate if provided.
-        const purchaseRate = Number(p.exchange_rate) || exchangeRate;
-        const convertWithRate = (amount: number, from: string) => {
-          if (from === saleCurrency) return amount;
-          if (from === 'USD' && saleCurrency === 'DOP') return amount * purchaseRate;
-          if (from === 'DOP' && saleCurrency === 'USD') return amount / purchaseRate;
-          return amount;
-        };
-        return sum + convertWithRate(unit * qty, fromCurrency);
-      }, 0);
 
-      const averageUnitCostConverted = totalPurchasedQty > 0
-        ? totalPurchasesConverted / totalPurchasedQty
-        : convertToSale(Number(product.cost), costCurrency);
-      
-      // Calculate shipping costs from legacy table
-      const legacyShippingCost = productShipping.reduce((sum, s) => sum + Number(s.cost), 0);
-      const legacyShippingCostConverted = productShipping.reduce((sum, s) => {
-        const shippingCurrency = s.cost_currency || 'USD';
-        return sum + convertToSale(Number(s.cost), shippingCurrency);
-      }, 0);
+      const totalShippingCost = productShipping.reduce((sum, s) => sum + Number(s.cost), 0);
+      const totalShippingCostConverted = totalShippingCost * (Number(product.exchange_rate) || 1);
 
-      // Calculate shipping costs from purchases
-      const purchasesShippingCost = productPurchases.reduce((sum, p) => sum + (Number(p.shipping_cost) || 0), 0);
-      const purchasesShippingCostConverted = productPurchases.reduce((sum, p) => {
-        const fromCurrency = (p.cost_currency || costCurrency) as string;
-        const purchaseRate = Number(p.exchange_rate) || exchangeRate;
-        const convertWithRate = (amount: number, from: string) => {
-          if (from === saleCurrency) return amount;
-          if (from === 'USD' && saleCurrency === 'DOP') return amount * purchaseRate;
-          if (from === 'DOP' && saleCurrency === 'USD') return amount / purchaseRate;
-          return amount;
-        };
-        return sum + convertWithRate(Number(p.shipping_cost) || 0, fromCurrency);
-      }, 0);
+      const qtyForInvestment = productPurchases.length > 0
+        ? productPurchases.reduce((sum, p) => sum + (Number(p.quantity) || 0), 0)
+        : Number(product.quantity_purchased) || 0;
 
-      const totalShippingCost = legacyShippingCost + purchasesShippingCost;
-      const totalShippingCostConverted = legacyShippingCostConverted + purchasesShippingCostConverted;
+      const totalInvested = productPurchases.length > 0
+        ? productPurchases.reduce((sum, p) => sum + (Number(p.unit_cost) * Number(p.quantity)), 0) + totalShippingCost
+        : (Number(product.cost) * qtyForInvestment) + totalShippingCost;
 
-      // Fallback to product.quantity_purchased for legacy products, but prefer purchase history when present.
-      const qtyForInvestment = totalPurchasedQty > 0 ? totalPurchasedQty : product.quantity_purchased;
-      const totalInvested = Number(product.cost) * qtyForInvestment + totalShippingCost;
-      const totalInvestedConverted = totalPurchasesConverted + totalShippingCostConverted;
-      
+      const totalInvestedConverted = totalInvested * (Number(product.exchange_rate) || 1);
+      const averageUnitCostConverted = qtyForInvestment > 0 ? totalInvestedConverted / qtyForInvestment : 0;
+
       const totalSold = productSales.reduce(
         (sum, s) => sum + Number(s.unit_price) * s.quantity,
         0
@@ -181,15 +133,12 @@ export function useStore(profileId: string | undefined) {
 
   // Financial summary
   const financialSummary = useMemo((): FinancialSummary => {
-    // Resumen en moneda base (RD$/DOP). Esto evita mezclar USD/DOP en KPIs.
     const BASE_CURRENCY = 'DOP' as const;
-
     const productById = new Map(products.map((p) => [p.id, p] as const));
 
     const convertToBase = (amount: number, from: 'USD' | 'DOP', exchangeRate: number) => {
       const rate = Number(exchangeRate) || 1;
       if (from === BASE_CURRENCY) return amount;
-      // USD -> DOP
       return amount * rate;
     };
 
@@ -218,7 +167,6 @@ export function useStore(profileId: string | undefined) {
       return sum + costBase * p.quantity_purchased;
     }, 0);
 
-    // Shipping from legacy store_shipping_costs table
     const legacyShippingCost = shippingCosts.reduce((sum, s) => {
       const product = productById.get(s.product_id);
       const rate = Number(product?.exchange_rate) || 1;
@@ -227,7 +175,6 @@ export function useStore(profileId: string | undefined) {
       return sum + shippingBase;
     }, 0);
 
-    // Shipping from purchases (shipping_cost field in store_purchases)
     const purchasesShippingCost = purchases.reduce((sum, pu) => {
       const product = productById.get(pu.product_id);
       const from = (pu.cost_currency || product?.cost_currency || 'USD') as 'USD' | 'DOP';
@@ -237,7 +184,6 @@ export function useStore(profileId: string | undefined) {
     }, 0);
 
     const totalShippingCost = legacyShippingCost + purchasesShippingCost;
-
     const totalInvested = totalProductsCost + totalShippingCost;
 
     const totalSold = sales.reduce((sum, s) => {
@@ -250,7 +196,6 @@ export function useStore(profileId: string | undefined) {
 
     const grossProfit = totalSold - totalInvested;
 
-    // Most profitable product
     let mostProfitableProduct: { name: string; profit: number } | null = null;
     let maxProfit = 0;
     productsWithDetails.forEach((p) => {
@@ -260,16 +205,15 @@ export function useStore(profileId: string | undefined) {
       }
     });
 
-    // Most profitable month
+    let mostProfitableMonth: { month: string; profit: number } | null = null;
+    let maxMonthlyProfit = 0;
     const monthlyProfits: Record<string, number> = {};
     sales.forEach((sale) => {
-      const month = sale.sale_date.substring(0, 7); // YYYY-MM
+      const month = (sale.sale_date || '').substring(0, 7);
       const saleAmount = Number(sale.unit_price) * sale.quantity;
       monthlyProfits[month] = (monthlyProfits[month] || 0) + saleAmount;
     });
 
-    let mostProfitableMonth: { month: string; profit: number } | null = null;
-    let maxMonthlyProfit = 0;
     Object.entries(monthlyProfits).forEach(([month, profit]) => {
       if (profit > maxMonthlyProfit) {
         maxMonthlyProfit = profit;
@@ -283,7 +227,7 @@ export function useStore(profileId: string | undefined) {
       totalShippingCost,
       totalSold,
       grossProfit,
-      netProfit: grossProfit, // Sin gastos adicionales por ahora
+      netProfit: grossProfit,
       currency: BASE_CURRENCY,
       totalProducts: products.length,
       totalSales: sales.length,
@@ -299,15 +243,13 @@ export function useStore(profileId: string | undefined) {
     if (!profileId) return null;
 
     try {
-      const { data: newPurchase, error } = await supabase
-        .from('store_purchases')
-        .insert({ ...data, user_id: profileId })
-        .select()
-        .single();
+      const newPurchase = {
+        ...data,
+        user_id: profileId,
+        created_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-
-      setPurchases((prev) => [newPurchase as StorePurchase, ...prev]);
+      const docRef = await addDoc(collection(db, 'store_purchases'), newPurchase);
 
       // Update product stock and purchased qty
       const product = products.find((p) => p.id === data.product_id);
@@ -323,7 +265,7 @@ export function useStore(profileId: string | undefined) {
       }
 
       toast({ title: 'Compra agregada', description: 'Se agregó la compra al historial' });
-      return newPurchase;
+      return { id: docRef.id, ...newPurchase } as StorePurchase;
     } catch (error: any) {
       console.error('Error creating purchase:', error);
       toast({
@@ -342,19 +284,18 @@ export function useStore(profileId: string | undefined) {
     if (!profileId) return null;
 
     try {
-      const { data: newProduct, error } = await supabase
-        .from('store_products')
-        .insert({ ...data, user_id: profileId })
-        .select()
-        .single();
+      const newProduct = {
+        ...data,
+        user_id: profileId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-
-      setProducts((prev) => [newProduct as StoreProduct, ...prev]);
+      const docRef = await addDoc(collection(db, 'store_products'), newProduct);
       toast({ title: 'Producto creado', description: 'El producto se agregó correctamente' });
-      return newProduct;
+      return { id: docRef.id, ...newProduct } as StoreProduct;
     } catch (error: any) {
-      console.error('Error creating product:', error);
+      console.error('Error creating product in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo crear el producto',
@@ -366,19 +307,13 @@ export function useStore(profileId: string | undefined) {
 
   const updateProduct = async (id: string, data: Partial<StoreProduct>) => {
     try {
-      const { error } = await supabase
-        .from('store_products')
-        .update(data)
-        .eq('id', id);
-
-      if (error) throw error;
-
-      setProducts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, ...data } : p))
-      );
+      await updateDoc(doc(db, 'store_products', id), {
+        ...data,
+        updated_at: new Date().toISOString(),
+      });
       toast({ title: 'Producto actualizado' });
     } catch (error: any) {
-      console.error('Error updating product:', error);
+      console.error('Error updating product in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo actualizar el producto',
@@ -389,16 +324,10 @@ export function useStore(profileId: string | undefined) {
 
   const deleteProduct = async (id: string) => {
     try {
-      const { error } = await supabase.from('store_products').delete().eq('id', id);
-
-      if (error) throw error;
-
-      setProducts((prev) => prev.filter((p) => p.id !== id));
-      setShippingCosts((prev) => prev.filter((s) => s.product_id !== id));
-      setSales((prev) => prev.filter((s) => s.product_id !== id));
+      await deleteDoc(doc(db, 'store_products', id));
       toast({ title: 'Producto eliminado' });
     } catch (error: any) {
-      console.error('Error deleting product:', error);
+      console.error('Error deleting product in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo eliminar el producto',
@@ -414,17 +343,15 @@ export function useStore(profileId: string | undefined) {
     if (!profileId) return null;
 
     try {
-      const { data: newShipping, error } = await supabase
-        .from('store_shipping_costs')
-        .insert({ ...data, user_id: profileId })
-        .select()
-        .single();
+      const newShipping = {
+        ...data,
+        user_id: profileId,
+        created_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-
-      setShippingCosts((prev) => [newShipping as StoreShippingCost, ...prev]);
+      const docRef = await addDoc(collection(db, 'store_shipping_costs'), newShipping);
       toast({ title: 'Envío agregado' });
-      return newShipping;
+      return { id: docRef.id, ...newShipping } as StoreShippingCost;
     } catch (error: any) {
       console.error('Error creating shipping cost:', error);
       toast({
@@ -438,16 +365,7 @@ export function useStore(profileId: string | undefined) {
 
   const updateShippingCost = async (id: string, data: Partial<StoreShippingCost>) => {
     try {
-      const { error } = await supabase
-        .from('store_shipping_costs')
-        .update(data)
-        .eq('id', id);
-
-      if (error) throw error;
-
-      setShippingCosts((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, ...data } : s))
-      );
+      await updateDoc(doc(db, 'store_shipping_costs', id), data);
       toast({ title: 'Envío actualizado' });
     } catch (error: any) {
       console.error('Error updating shipping cost:', error);
@@ -461,11 +379,7 @@ export function useStore(profileId: string | undefined) {
 
   const deleteShippingCost = async (id: string) => {
     try {
-      const { error } = await supabase.from('store_shipping_costs').delete().eq('id', id);
-
-      if (error) throw error;
-
-      setShippingCosts((prev) => prev.filter((s) => s.id !== id));
+      await deleteDoc(doc(db, 'store_shipping_costs', id));
       toast({ title: 'Envío eliminado' });
     } catch (error: any) {
       console.error('Error deleting shipping cost:', error);
@@ -482,15 +396,13 @@ export function useStore(profileId: string | undefined) {
     if (!profileId) return null;
 
     try {
-      const { data: newSale, error } = await supabase
-        .from('store_sales')
-        .insert({ ...data, user_id: profileId })
-        .select()
-        .single();
+      const newSale = {
+        ...data,
+        user_id: profileId,
+        created_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-
-      setSales((prev) => [newSale as StoreSale, ...prev]);
+      const docRef = await addDoc(collection(db, 'store_sales'), newSale);
 
       // Actualizar stock del producto
       const product = products.find((p) => p.id === data.product_id);
@@ -503,9 +415,9 @@ export function useStore(profileId: string | undefined) {
       }
 
       toast({ title: 'Venta registrada' });
-      return newSale;
+      return { id: docRef.id, ...newSale } as StoreSale;
     } catch (error: any) {
-      console.error('Error creating sale:', error);
+      console.error('Error creating sale in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo registrar la venta',
@@ -517,14 +429,10 @@ export function useStore(profileId: string | undefined) {
 
   const updateSale = async (id: string, data: Partial<StoreSale>) => {
     try {
-      const { error } = await supabase.from('store_sales').update(data).eq('id', id);
-
-      if (error) throw error;
-
-      setSales((prev) => prev.map((s) => (s.id === id ? { ...s, ...data } : s)));
+      await updateDoc(doc(db, 'store_sales', id), data);
       toast({ title: 'Venta actualizada' });
     } catch (error: any) {
-      console.error('Error updating sale:', error);
+      console.error('Error updating sale in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo actualizar la venta',
@@ -535,14 +443,10 @@ export function useStore(profileId: string | undefined) {
 
   const deleteSale = async (id: string) => {
     try {
-      const { error } = await supabase.from('store_sales').delete().eq('id', id);
-
-      if (error) throw error;
-
-      setSales((prev) => prev.filter((s) => s.id !== id));
+      await deleteDoc(doc(db, 'store_sales', id));
       toast({ title: 'Venta eliminada' });
     } catch (error: any) {
-      console.error('Error deleting sale:', error);
+      console.error('Error deleting sale in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo eliminar la venta',
@@ -553,21 +457,9 @@ export function useStore(profileId: string | undefined) {
 
   const updatePurchase = async (id: string, data: Partial<StorePurchase>) => {
     try {
-      // Get the original purchase to calculate stock difference
       const originalPurchase = purchases.find((p) => p.id === id);
-      
-      const { error } = await supabase
-        .from('store_purchases')
-        .update(data)
-        .eq('id', id);
+      await updateDoc(doc(db, 'store_purchases', id), data);
 
-      if (error) throw error;
-
-      setPurchases((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, ...data } : p))
-      );
-
-      // Adjust product stock if quantity changed
       if (originalPurchase && data.quantity !== undefined) {
         const oldQty = Number(originalPurchase.quantity) || 0;
         const newQty = Number(data.quantity) || 0;
@@ -589,7 +481,7 @@ export function useStore(profileId: string | undefined) {
 
       toast({ title: 'Compra actualizada' });
     } catch (error: any) {
-      console.error('Error updating purchase:', error);
+      console.error('Error updating purchase in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo actualizar la compra',
@@ -600,16 +492,9 @@ export function useStore(profileId: string | undefined) {
 
   const deletePurchase = async (id: string) => {
     try {
-      // Get the purchase to update product stock
       const purchase = purchases.find((p) => p.id === id);
-      
-      const { error } = await supabase.from('store_purchases').delete().eq('id', id);
+      await deleteDoc(doc(db, 'store_purchases', id));
 
-      if (error) throw error;
-
-      setPurchases((prev) => prev.filter((p) => p.id !== id));
-
-      // Update product stock and quantity_purchased
       if (purchase) {
         const product = products.find((p) => p.id === purchase.product_id);
         if (product) {
@@ -626,7 +511,7 @@ export function useStore(profileId: string | undefined) {
 
       toast({ title: 'Compra eliminada' });
     } catch (error: any) {
-      console.error('Error deleting purchase:', error);
+      console.error('Error deleting purchase in Firestore:', error);
       toast({
         title: 'Error',
         description: 'No se pudo eliminar la compra',
@@ -643,7 +528,7 @@ export function useStore(profileId: string | undefined) {
     productsWithDetails,
     financialSummary,
     loading,
-    refetch: fetchStoreData,
+    refetch: () => {},
     // Products
     createProduct,
     updateProduct,

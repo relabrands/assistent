@@ -1,5 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  setDoc,
+  onSnapshot, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { auth, db } from '@/integrations/firebase/client';
 import { toast } from 'sonner';
 
 export type FieldType = 'text' | 'textarea' | 'select' | 'multiselect' | 'date' | 'checkbox' | 'number';
@@ -30,29 +41,30 @@ export function useCustomFields(projectId: string | null) {
   const [fields, setFields] = useState<CustomField[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const fetchFields = useCallback(async () => {
-    if (!projectId) return;
-    
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('content_custom_fields')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('display_order', { ascending: true });
-
-      if (error) throw error;
-      setFields((data as CustomField[]) || []);
-    } catch (error) {
-      console.error('Error fetching custom fields:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [projectId]);
-
   useEffect(() => {
-    fetchFields();
-  }, [fetchFields]);
+    if (!projectId) {
+      setFields([]);
+      return;
+    }
+
+    setLoading(true);
+    const q = query(
+      collection(db, 'content_custom_fields'),
+      where('project_id', '==', projectId)
+    );
+
+    const unsubscribe = onSnapshot(q, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as CustomField));
+      items.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
+      setFields(items);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching custom fields from Firestore:', error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [projectId]);
 
   const addField = useCallback(async (field: {
     field_name: string;
@@ -64,38 +76,26 @@ export function useCustomFields(projectId: string | null) {
     if (!projectId) return null;
 
     try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', (await supabase.auth.getUser()).data.user?.id)
-        .single();
-
-      if (!profile) throw new Error('Profile not found');
-
+      const user = auth.currentUser;
       const maxOrder = fields.length > 0 
         ? Math.max(...fields.map(f => f.display_order)) 
         : -1;
 
-      const { data, error } = await supabase
-        .from('content_custom_fields')
-        .insert({
-          project_id: projectId,
-          field_name: field.field_name,
-          field_label: field.field_label,
-          field_type: field.field_type,
-          field_options: field.field_options || null,
-          is_required: field.is_required || false,
-          display_order: maxOrder + 1,
-          created_by: profile.id,
-        })
-        .select()
-        .single();
+      const newField = {
+        project_id: projectId,
+        field_name: field.field_name,
+        field_label: field.field_label,
+        field_type: field.field_type,
+        field_options: field.field_options || null,
+        is_required: field.is_required || false,
+        display_order: maxOrder + 1,
+        created_by: user?.uid || 'user',
+        created_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-      
-      setFields(prev => [...prev, data as CustomField]);
+      const docRef = await addDoc(collection(db, 'content_custom_fields'), newField);
       toast.success('Campo personalizado agregado');
-      return data;
+      return { id: docRef.id, ...newField } as CustomField;
     } catch (error: unknown) {
       console.error('Error adding custom field:', error);
       toast.error('Error al agregar campo personalizado');
@@ -105,16 +105,7 @@ export function useCustomFields(projectId: string | null) {
 
   const updateField = useCallback(async (fieldId: string, updates: Partial<CustomField>) => {
     try {
-      const { error } = await supabase
-        .from('content_custom_fields')
-        .update(updates)
-        .eq('id', fieldId);
-
-      if (error) throw error;
-
-      setFields(prev => prev.map(f => 
-        f.id === fieldId ? { ...f, ...updates } : f
-      ));
+      await updateDoc(doc(db, 'content_custom_fields', fieldId), updates);
       toast.success('Campo actualizado');
     } catch (error) {
       console.error('Error updating custom field:', error);
@@ -124,14 +115,7 @@ export function useCustomFields(projectId: string | null) {
 
   const deleteField = useCallback(async (fieldId: string) => {
     try {
-      const { error } = await supabase
-        .from('content_custom_fields')
-        .delete()
-        .eq('id', fieldId);
-
-      if (error) throw error;
-
-      setFields(prev => prev.filter(f => f.id !== fieldId));
+      await deleteDoc(doc(db, 'content_custom_fields', fieldId));
       toast.success('Campo eliminado');
     } catch (error) {
       console.error('Error deleting custom field:', error);
@@ -145,7 +129,7 @@ export function useCustomFields(projectId: string | null) {
     addField,
     updateField,
     deleteField,
-    refetch: fetchFields,
+    refetch: () => {},
   };
 }
 
@@ -153,54 +137,48 @@ export function useCustomFieldValues(contentId: string | null) {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [loading, setLoading] = useState(false);
 
-  const fetchValues = useCallback(async () => {
-    if (!contentId) return;
+  useEffect(() => {
+    if (!contentId) {
+      setValues({});
+      return;
+    }
 
     setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('content_custom_values')
-        .select('*')
-        .eq('content_id', contentId);
+    const q = query(
+      collection(db, 'content_custom_values'),
+      where('content_id', '==', contentId)
+    );
 
-      if (error) throw error;
-
+    const unsubscribe = onSnapshot(q, (snap) => {
       const valuesMap: Record<string, unknown> = {};
-      (data || []).forEach((v: CustomFieldValue) => {
+      snap.docs.forEach((docSnap) => {
+        const v = docSnap.data() as CustomFieldValue;
         valuesMap[v.field_id] = v.value;
       });
       setValues(valuesMap);
-    } catch (error) {
-      console.error('Error fetching custom field values:', error);
-    } finally {
       setLoading(false);
-    }
+    }, (error) => {
+      console.error('Error fetching custom field values from Firestore:', error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [contentId]);
 
-  useEffect(() => {
-    fetchValues();
-  }, [fetchValues]);
-
   const saveValues = useCallback(async (
-    contentId: string,
+    targetContentId: string,
     fieldValues: Record<string, unknown>
   ) => {
     try {
-      const upserts = Object.entries(fieldValues).map(([fieldId, value]) => ({
-        content_id: contentId,
-        field_id: fieldId,
-        value: value as string,
-        updated_at: new Date().toISOString(),
-      }));
-
-      for (const upsert of upserts) {
-        const { error } = await supabase
-          .from('content_custom_values')
-          .upsert(upsert, { onConflict: 'content_id,field_id' });
-
-        if (error) throw error;
+      for (const [fieldId, value] of Object.entries(fieldValues)) {
+        const docId = `${targetContentId}_${fieldId}`;
+        await setDoc(doc(db, 'content_custom_values', docId), {
+          content_id: targetContentId,
+          field_id: fieldId,
+          value,
+          updated_at: new Date().toISOString(),
+        });
       }
-
       setValues(fieldValues);
     } catch (error) {
       console.error('Error saving custom field values:', error);
@@ -212,6 +190,6 @@ export function useCustomFieldValues(contentId: string | null) {
     values,
     loading,
     saveValues,
-    refetch: fetchValues,
+    refetch: () => {},
   };
 }

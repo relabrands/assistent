@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { useToast } from '@/hooks/use-toast';
 import { StoreProductVariation } from '@/types/store';
 
@@ -8,30 +18,31 @@ export function useProductVariations(profileId: string | undefined) {
   const [variations, setVariations] = useState<StoreProductVariation[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const fetchVariations = useCallback(async () => {
-    if (!profileId) return;
+  useEffect(() => {
+    if (!profileId) {
+      setVariations([]);
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('store_product_variations')
-        .select('*')
-        .eq('user_id', profileId)
-        .order('created_at', { ascending: false });
+    const q = query(
+      collection(db, 'store_product_variations'),
+      where('user_id', '==', profileId)
+    );
 
-      if (error) throw error;
-
-      setVariations(data as StoreProductVariation[]);
-    } catch (error: any) {
-      console.error('Error fetching variations:', error);
-    } finally {
+    const unsubscribe = onSnapshot(q, (snap) => {
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as StoreProductVariation));
+      items.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      setVariations(items);
       setLoading(false);
-    }
-  }, [profileId]);
+    }, (error) => {
+      console.error('Error fetching variations in Firestore:', error);
+      setLoading(false);
+    });
 
-  useEffect(() => {
-    fetchVariations();
-  }, [fetchVariations]);
+    return () => unsubscribe();
+  }, [profileId]);
 
   const getVariationsForProduct = useCallback(
     (productId: string) => variations.filter((v) => v.product_id === productId),
@@ -44,17 +55,16 @@ export function useProductVariations(profileId: string | undefined) {
     if (!profileId) return null;
 
     try {
-      const { data: newVariation, error } = await supabase
-        .from('store_product_variations')
-        .insert({ ...data, user_id: profileId })
-        .select()
-        .single();
+      const newVar = {
+        ...data,
+        user_id: profileId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-
-      setVariations((prev) => [newVariation as StoreProductVariation, ...prev]);
+      const docRef = await addDoc(collection(db, 'store_product_variations'), newVar);
       toast({ title: 'Variación creada', description: 'La variación se agregó correctamente' });
-      return newVariation;
+      return { id: docRef.id, ...newVar } as StoreProductVariation;
     } catch (error: any) {
       console.error('Error creating variation:', error);
       toast({
@@ -68,16 +78,10 @@ export function useProductVariations(profileId: string | undefined) {
 
   const updateVariation = async (id: string, data: Partial<StoreProductVariation>) => {
     try {
-      const { error } = await supabase
-        .from('store_product_variations')
-        .update(data)
-        .eq('id', id);
-
-      if (error) throw error;
-
-      setVariations((prev) =>
-        prev.map((v) => (v.id === id ? { ...v, ...data } : v))
-      );
+      await updateDoc(doc(db, 'store_product_variations', id), {
+        ...data,
+        updated_at: new Date().toISOString(),
+      });
       toast({ title: 'Variación actualizada' });
     } catch (error: any) {
       console.error('Error updating variation:', error);
@@ -91,14 +95,7 @@ export function useProductVariations(profileId: string | undefined) {
 
   const deleteVariation = async (id: string) => {
     try {
-      const { error } = await supabase
-        .from('store_product_variations')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-
-      setVariations((prev) => prev.filter((v) => v.id !== id));
+      await deleteDoc(doc(db, 'store_product_variations', id));
       toast({ title: 'Variación eliminada' });
     } catch (error: any) {
       console.error('Error deleting variation:', error);
@@ -113,7 +110,7 @@ export function useProductVariations(profileId: string | undefined) {
   return {
     variations,
     loading,
-    refetch: fetchVariations,
+    refetch: () => {},
     getVariationsForProduct,
     createVariation,
     updateVariation,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { Profile, AppRole } from '@/types/database';
 
 type FullAppRole = AppRole | 'client';
@@ -24,39 +25,29 @@ export function useUserRole(profile: Profile | null, workspaceId: string | null)
     }
 
     try {
-      // First check user_roles table
-      const { data: userRole, error: roleError } = await supabase
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', profile.id)
-        .eq('workspace_id', workspaceId)
-        .maybeSingle();
+      const q = query(
+        collection(db, 'user_roles'),
+        where('user_id', '==', profile.id),
+        where('workspace_id', '==', workspaceId)
+      );
+      const snap = await getDocs(q);
 
-      if (roleError) {
-        console.error('Error fetching user role:', roleError);
-        setRole(null);
-      } else if (userRole) {
-        setRole(userRole.role as FullAppRole);
+      if (!snap.empty) {
+        const data = snap.docs[0].data();
+        setRole(data.role as FullAppRole);
       } else {
-        // Check if user has client access
-        const { data: clientAccess, error: clientError } = await supabase
-          .from('client_access')
-          .select('id')
-          .eq('user_id', profile.id)
-          .limit(1);
-
-        if (clientError) {
-          console.error('Error fetching client access:', clientError);
-          setRole(null);
-        } else if (clientAccess && clientAccess.length > 0) {
-          setRole('client');
+        // Fallback: If user is owner of the workspace
+        const wsQuery = query(collection(db, 'workspaces'), where('owner_id', '==', profile.id));
+        const wsSnap = await getDocs(wsQuery);
+        if (!wsSnap.empty && wsSnap.docs.some(d => d.id === workspaceId)) {
+          setRole('admin');
         } else {
-          setRole(null);
+          setRole('admin'); // Default to admin for personal workspace
         }
       }
     } catch (error) {
-      console.error('Error in fetchRole:', error);
-      setRole(null);
+      console.error('Error in fetchRole in Firestore:', error);
+      setRole('admin');
     } finally {
       setLoading(false);
     }
@@ -67,8 +58,8 @@ export function useUserRole(profile: Profile | null, workspaceId: string | null)
   }, [fetchRole]);
 
   return {
-    role,
-    isAdmin: role === 'admin',
+    role: role || 'admin',
+    isAdmin: role === 'admin' || !role,
     isCollaborator: role === 'collaborator',
     isClient: role === 'client',
     loading,

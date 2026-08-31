@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  where 
+} from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 import { ContentItem, ContentStatus, ContentType, PlatformType } from '@/types/content';
 import { Profile } from '@/types/database';
 import { toast } from 'sonner';
@@ -8,58 +18,39 @@ export function useContentItems(profile: Profile | null, clientId: string | null
   const [contentItems, setContentItems] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchContentItems = useCallback(async () => {
+  useEffect(() => {
     if (!profile) {
       setContentItems([]);
       setLoading(false);
       return;
     }
 
-    try {
-      let query = supabase
-        .from('content_items')
-        .select('*')
-        .order('scheduled_date', { ascending: true, nullsFirst: false });
+    setLoading(true);
 
-      if (clientId) {
-        query = query.eq('client_id', clientId);
-      }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
-      setContentItems((data || []) as ContentItem[]);
-    } catch (error) {
-      console.error('Error fetching content items:', error);
-      toast.error('Error al cargar contenidos');
-    } finally {
-      setLoading(false);
+    let contentQuery;
+    if (clientId) {
+      contentQuery = query(collection(db, 'content_items'), where('client_id', '==', clientId));
+    } else {
+      contentQuery = query(collection(db, 'content_items'));
     }
+
+    const unsubscribe = onSnapshot(contentQuery, (snapshot) => {
+      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ContentItem));
+      items.sort((a, b) => {
+        if (!a.scheduled_date) return 1;
+        if (!b.scheduled_date) return -1;
+        return new Date(a.scheduled_date).getTime() - new Date(b.scheduled_date).getTime();
+      });
+      setContentItems(items);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching content items in Firestore:', error);
+      toast.error('Error al cargar contenidos');
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [profile, clientId]);
-
-  useEffect(() => {
-    fetchContentItems();
-
-    // Set up realtime subscription
-    const channel = supabase
-      .channel('content_items_changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'content_items',
-        },
-        () => {
-          fetchContentItems();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [fetchContentItems]);
 
   const addContentItem = useCallback(async (contentData: {
     client_id: string;
@@ -81,22 +72,19 @@ export function useContentItems(profile: Profile | null, clientId: string | null
     if (!profile) return null;
 
     try {
-      const { data, error } = await supabase
-        .from('content_items')
-        .insert({
-          ...contentData,
-          scheduled_date: contentData.scheduled_date?.toISOString() || null,
-          created_by: profile.id,
-        })
-        .select()
-        .single();
+      const newItem = {
+        ...contentData,
+        scheduled_date: contentData.scheduled_date?.toISOString() || null,
+        created_by: profile.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
 
-      if (error) throw error;
-
+      const docRef = await addDoc(collection(db, 'content_items'), newItem);
       toast.success('Contenido creado correctamente');
-      return data as ContentItem;
+      return { id: docRef.id, ...newItem } as ContentItem;
     } catch (error) {
-      console.error('Error creating content:', error);
+      console.error('Error creating content in Firestore:', error);
       toast.error('Error al crear contenido');
       return null;
     }
@@ -121,7 +109,7 @@ export function useContentItems(profile: Profile | null, clientId: string | null
     approved_at: Date | null;
   }>) => {
     try {
-      const updateData: Record<string, unknown> = { ...contentData };
+      const updateData: Record<string, unknown> = { ...contentData, updated_at: new Date().toISOString() };
       
       if (contentData.scheduled_date !== undefined) {
         updateData.scheduled_date = contentData.scheduled_date?.toISOString() || null;
@@ -133,17 +121,11 @@ export function useContentItems(profile: Profile | null, clientId: string | null
         updateData.approved_at = contentData.approved_at?.toISOString() || null;
       }
 
-      const { error } = await supabase
-        .from('content_items')
-        .update(updateData)
-        .eq('id', id);
-
-      if (error) throw error;
-
+      await updateDoc(doc(db, 'content_items', id), updateData);
       toast.success('Contenido actualizado');
       return true;
     } catch (error) {
-      console.error('Error updating content:', error);
+      console.error('Error updating content in Firestore:', error);
       toast.error('Error al actualizar contenido');
       return false;
     }
@@ -151,119 +133,63 @@ export function useContentItems(profile: Profile | null, clientId: string | null
 
   const deleteContentItem = useCallback(async (id: string) => {
     try {
-      const { error } = await supabase
-        .from('content_items')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-
+      await deleteDoc(doc(db, 'content_items', id));
       toast.success('Contenido eliminado');
       return true;
     } catch (error) {
-      console.error('Error deleting content:', error);
+      console.error('Error deleting content in Firestore:', error);
       toast.error('Error al eliminar contenido');
       return false;
     }
   }, []);
 
-  // Approval functions with email notifications
-  const approveContent = useCallback(async (id: string, clientName?: string) => {
+  const approveContent = useCallback(async (id: string) => {
     if (!profile) return false;
 
     try {
-      // Get content details first
-      const content = contentItems.find(c => c.id === id);
-      
-      const { error } = await supabase
-        .from('content_items')
-        .update({
-          status: 'approved' as ContentStatus,
-          approved_by: profile.id,
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', id);
-
-      if (error) throw error;
-
-      // Send email notification
-      if (content) {
-        try {
-          await supabase.functions.invoke('send-content-notification', {
-            body: {
-              contentId: id,
-              action: 'approved',
-              clientName: clientName || profile.display_name,
-              contentTitle: content.title,
-            },
-          });
-        } catch (emailError) {
-          console.error('Failed to send notification email:', emailError);
-        }
-      }
+      await updateDoc(doc(db, 'content_items', id), {
+        status: 'approved' as ContentStatus,
+        approved_by: profile.id,
+        approved_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
       toast.success('Contenido aprobado');
       return true;
     } catch (error) {
-      console.error('Error approving content:', error);
+      console.error('Error approving content in Firestore:', error);
       toast.error('Error al aprobar contenido');
       return false;
     }
-  }, [profile, contentItems]);
+  }, [profile]);
 
-  const requestChanges = useCallback(async (id: string, comment?: string, clientName?: string) => {
+  const requestChanges = useCallback(async (id: string, comment?: string) => {
     if (!profile) return false;
     
     try {
-      // Get content details first
-      const content = contentItems.find(c => c.id === id);
-      
-      const { error } = await supabase
-        .from('content_items')
-        .update({
-          status: 'requires_changes' as ContentStatus,
-        })
-        .eq('id', id);
+      await updateDoc(doc(db, 'content_items', id), {
+        status: 'requires_changes' as ContentStatus,
+        updated_at: new Date().toISOString(),
+      });
 
-      if (error) throw error;
-
-      // Add comment if provided
       if (comment) {
-        await supabase
-          .from('content_comments')
-          .insert({
-            content_id: id,
-            author_id: profile.id,
-            comment,
-            is_change_request: true,
-          });
-      }
-
-      // Send email notification
-      if (content) {
-        try {
-          await supabase.functions.invoke('send-content-notification', {
-            body: {
-              contentId: id,
-              action: 'changes_requested',
-              clientName: clientName || profile.display_name,
-              contentTitle: content.title,
-              comment,
-            },
-          });
-        } catch (emailError) {
-          console.error('Failed to send notification email:', emailError);
-        }
+        await addDoc(collection(db, 'content_comments'), {
+          content_id: id,
+          author_id: profile.id,
+          comment,
+          is_change_request: true,
+          created_at: new Date().toISOString(),
+        });
       }
 
       toast.success('Cambios solicitados');
       return true;
     } catch (error) {
-      console.error('Error requesting changes:', error);
+      console.error('Error requesting changes in Firestore:', error);
       toast.error('Error al solicitar cambios');
       return false;
     }
-  }, [profile, contentItems]);
+  }, [profile]);
 
   return {
     contentItems,
@@ -273,6 +199,6 @@ export function useContentItems(profile: Profile | null, clientId: string | null
     deleteContentItem,
     approveContent,
     requestChanges,
-    refetch: fetchContentItems,
+    refetch: () => {},
   };
 }

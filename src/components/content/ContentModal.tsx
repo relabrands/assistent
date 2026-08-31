@@ -50,7 +50,8 @@ import {
   Hash,
   MessageSquare
 } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '@/integrations/firebase/client';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useCustomFields, useCustomFieldValues } from '@/hooks/useCustomFields';
@@ -144,19 +145,12 @@ export function ContentModal({
       const newUrls: string[] = [];
       
       for (const file of Array.from(files)) {
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${crypto.randomUUID()}.${fileExt}`;
-        const filePath = `content/${clientId}/${fileName}`;
+        const fileExt = file.name.split('.').pop() || 'bin';
+        const fileName = `content/${clientId}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const storageRef = ref(storage, fileName);
 
-        const { error: uploadError } = await supabase.storage
-          .from('content-files')
-          .upload(filePath, file);
-
-        if (uploadError) throw uploadError;
-
-        const { data: { publicUrl } } = supabase.storage
-          .from('content-files')
-          .getPublicUrl(filePath);
+        await uploadBytes(storageRef, file);
+        const publicUrl = await getDownloadURL(storageRef);
 
         newUrls.push(publicUrl);
       }
