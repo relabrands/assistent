@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { 
-  Inbox, 
-  CalendarDays, 
-  FolderKanban, 
-  Users, 
-  CheckCircle2, 
-  Settings, 
+import {
+  Inbox,
+  CalendarDays,
+  FolderKanban,
+  Users,
+  CheckCircle2,
+  Settings,
   PanelLeftClose,
   PanelLeft,
   LayoutDashboard,
@@ -65,10 +65,10 @@ const mainNavItems = [
   { id: 'store' as SidebarView, title: 'Tienda', icon: ShoppingBag },
 ];
 
-export function AppSidebar({ 
-  profile, 
+export function AppSidebar({
+  profile,
   projects,
-  activeView, 
+  activeView,
   onViewChange,
   onOpenSettings,
   onOpenProfile,
@@ -92,7 +92,7 @@ export function AppSidebar({
   };
 
   return (
-    <Sidebar 
+    <Sidebar
       collapsible="icon"
       className="border-r border-border bg-card"
     >
@@ -106,13 +106,13 @@ export function AppSidebar({
           </div>
           {!isCollapsed && (
             <div className="flex-1 min-w-0">
-              <h1 className="font-bold text-sm truncate">Chaos Tamer</h1>
+              <h1 className="font-bold text-sm truncate">Personal Robinson</h1>
               <p className="text-xs text-muted-foreground truncate">Gestión de tareas</p>
             </div>
           )}
-          <Button 
-            variant="ghost" 
-            size="icon" 
+          <Button
+            variant="ghost"
+            size="icon"
             className="h-8 w-8 shrink-0"
             onClick={toggleSidebar}
           >
@@ -133,7 +133,7 @@ export function AppSidebar({
             <SidebarMenu>
               {mainNavItems.map((item) => (
                 <SidebarMenuItem key={item.id}>
-                  <SidebarMenuButton 
+                  <SidebarMenuButton
                     onClick={() => onViewChange(item.id)}
                     isActive={activeView === item.id}
                     tooltip={item.title}
@@ -155,7 +155,7 @@ export function AppSidebar({
               <SidebarMenu>
                 {clientProjects.map((project) => (
                   <SidebarMenuItem key={project.id}>
-                    <SidebarMenuButton 
+                    <SidebarMenuButton
                       onClick={() => onOpenClients(project)}
                       tooltip={project.name}
                     >
@@ -201,8 +201,8 @@ export function AppSidebar({
       <SidebarFooter className="p-3 border-t border-border">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               className={cn(
                 "w-full justify-start gap-3 h-auto py-2",
                 isCollapsed && "justify-center px-2"

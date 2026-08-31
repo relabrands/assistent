@@ -63,10 +63,9 @@ const GEMINI_API_KEY =
   "";
 
 const CANDIDATE_MODELS = [
-  "gemini-3.6-flash",
-  "gemini-flash-latest",
-  "gemini-3.1-flash-lite",
-  "gemini-3-flash-preview"
+  "gemini-1.5-flash",
+  "gemini-1.5-pro",
+  "gemini-2.5-flash"
 ];
 
 /**
