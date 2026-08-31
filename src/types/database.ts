@@ -42,6 +42,13 @@ export interface Project {
   updated_at: string;
 }
 
+export interface Subtask {
+  id: string;
+  title: string;
+  completed: boolean;
+  created_at?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -59,6 +66,7 @@ export interface Task {
   recurrence_type: RecurrenceType | null;
   recurrence_parent_id: string | null;
   client: string | null;
+  subtasks?: Subtask[];
   created_at: string;
   updated_at: string;
 }

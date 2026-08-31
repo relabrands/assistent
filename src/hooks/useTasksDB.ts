@@ -12,7 +12,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 import { db } from '@/integrations/firebase/client';
-import { Task, TaskStatus, Profile, TaskPriority, LifeArea, Workspace, RecurrenceType } from '@/types/database';
+import { Task, TaskStatus, Profile, TaskPriority, LifeArea, Workspace, RecurrenceType, Subtask } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
 import { addDays, addWeeks, addMonths } from 'date-fns';
 
@@ -135,6 +135,7 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     status?: TaskStatus;
     workspace_id?: string | null;
     client?: string | null;
+    subtasks?: Subtask[];
   }) => {
     const updates: any = {
       updated_at: new Date().toISOString(),
@@ -147,6 +148,7 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     if (taskData.project_id !== undefined) updates.project_id = taskData.project_id;
     if (taskData.workspace_id !== undefined) updates.workspace_id = taskData.workspace_id;
     if (taskData.client !== undefined) updates.client = taskData.client;
+    if (taskData.subtasks !== undefined) updates.subtasks = taskData.subtasks;
     if (taskData.due_date !== undefined) {
       updates.due_date = taskData.due_date?.toISOString() || null;
     }

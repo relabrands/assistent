@@ -8,11 +8,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Task, TaskNote, Profile, Project, SECTOR_LABELS, SECTOR_COLORS, LIFE_AREA_LABELS, LIFE_AREA_COLORS } from '@/types/database';
+import { Task, TaskNote, Profile, Project, SECTOR_LABELS, SECTOR_COLORS, LIFE_AREA_LABELS, LIFE_AREA_COLORS, Subtask } from '@/types/database';
 import { useTaskNotes } from '@/hooks/useTaskNotes';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { MessageSquare, Send, Trash2, Calendar, Flag, User, Pencil } from 'lucide-react';
+import { MessageSquare, Send, Trash2, Calendar, Flag, User, Pencil, CheckCircle2, Circle, ListTodo, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface TaskDetailModalProps {
@@ -23,6 +23,7 @@ interface TaskDetailModalProps {
   projects: Project[];
   currentProfile: Profile;
   onEditTask?: (task: Task) => void;
+  onUpdateTask?: (id: string, updates: Partial<Task>) => void;
 }
 
 const priorityLabels: Record<string, string> = {
@@ -39,9 +40,11 @@ export function TaskDetailModal({
   projects,
   currentProfile,
   onEditTask,
+  onUpdateTask,
 }: TaskDetailModalProps) {
   const [notes, setNotes] = useState<TaskNote[]>([]);
   const [newNote, setNewNote] = useState('');
+  const [newSubtask, setNewSubtask] = useState('');
   const [loadingNotes, setLoadingNotes] = useState(false);
   const { fetchNotes, addNote, deleteNote, loading: submitting } = useTaskNotes(currentProfile);
 
@@ -77,6 +80,37 @@ export function TaskDetailModal({
       onOpenChange(false);
       onEditTask(task);
     }
+  };
+
+  const handleAddSubtask = () => {
+    if (!task || !newSubtask.trim() || !onUpdateTask) return;
+    
+    const newSubtaskObj: Subtask = {
+      id: crypto.randomUUID(),
+      title: newSubtask.trim(),
+      completed: false,
+      created_at: new Date().toISOString()
+    };
+    
+    const updatedSubtasks = [...(task.subtasks || []), newSubtaskObj];
+    onUpdateTask(task.id, { subtasks: updatedSubtasks });
+    setNewSubtask('');
+  };
+
+  const handleToggleSubtask = (subtaskId: string) => {
+    if (!task || !onUpdateTask) return;
+    
+    const updatedSubtasks = (task.subtasks || []).map(st => 
+      st.id === subtaskId ? { ...st, completed: !st.completed } : st
+    );
+    onUpdateTask(task.id, { subtasks: updatedSubtasks });
+  };
+
+  const handleDeleteSubtask = (subtaskId: string) => {
+    if (!task || !onUpdateTask) return;
+    
+    const updatedSubtasks = (task.subtasks || []).filter(st => st.id !== subtaskId);
+    onUpdateTask(task.id, { subtasks: updatedSubtasks });
   };
 
   if (!task) return null;
@@ -141,7 +175,61 @@ export function TaskDetailModal({
           )}
         </div>
 
-        <div className="flex-1 min-h-0 mt-4">
+        <div className="flex-1 min-h-0 mt-4 overflow-y-auto pr-2">
+          {/* Subtareas Section */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <ListTodo className="w-4 h-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Subtareas ({task.subtasks?.length || 0})</span>
+              </div>
+              {task.subtasks && task.subtasks.length > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  {task.subtasks.filter(s => s.completed).length} / {task.subtasks.length} completadas
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-2 mb-3">
+              {(task.subtasks || []).map((subtask) => (
+                <div key={subtask.id} className="flex items-start gap-2 group bg-secondary/30 p-2 rounded-md">
+                  <button 
+                    onClick={() => handleToggleSubtask(subtask.id)}
+                    className="mt-0.5 text-muted-foreground hover:text-primary transition-colors"
+                  >
+                    {subtask.completed ? (
+                      <CheckCircle2 className="w-4 h-4 text-green-500" />
+                    ) : (
+                      <Circle className="w-4 h-4" />
+                    )}
+                  </button>
+                  <span className={cn("text-sm flex-1", subtask.completed && "text-muted-foreground line-through")}>
+                    {subtask.title}
+                  </span>
+                  <button
+                    onClick={() => handleDeleteSubtask(subtask.id)}
+                    className="p-1 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2">
+              <Input
+                value={newSubtask}
+                onChange={(e) => setNewSubtask(e.target.value)}
+                placeholder="Agregar una subtarea..."
+                className="h-8 text-sm"
+                onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleAddSubtask()}
+              />
+              <Button size="icon" variant="secondary" className="h-8 w-8 shrink-0" onClick={handleAddSubtask} disabled={!newSubtask.trim()}>
+                <Plus className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+
           <div className="flex items-center gap-2 mb-3">
             <MessageSquare className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-medium">Notas ({notes.length})</span>
