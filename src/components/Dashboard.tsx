@@ -743,7 +743,10 @@ export function Dashboard() {
         projects={projects}
         profiles={profiles}
         currentWorkspace={currentWorkspace}
+        tasks={tasks}
         onAddTasks={handleAIAddTasks}
+        onUpdateTask={updateTask}
+        onCompleteTask={toggleTaskComplete}
       />
     </div>
   );

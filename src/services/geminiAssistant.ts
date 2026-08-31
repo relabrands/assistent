@@ -10,24 +10,56 @@ export interface ParsedTask {
   status?: 'inbox' | 'week';
 }
 
+export interface RescheduledTask {
+  id: string;
+  title: string;
+  new_due_date?: string | null;
+  new_status?: 'inbox' | 'week' | 'risk' | 'completed';
+  reason?: string;
+}
+
+export interface CompletedTask {
+  id: string;
+  title: string;
+}
+
 export interface AIResponse {
-  action: 'create_tasks' | 'list_tasks' | 'chat';
+  action: 'create_tasks' | 'reschedule_tasks' | 'complete_tasks' | 'list_tasks' | 'chat';
   tasks?: ParsedTask[];
+  rescheduled_tasks?: RescheduledTask[];
+  completed_tasks?: CompletedTask[];
   message: string;
   needs_confirmation?: boolean;
   error?: string;
+}
+
+export interface TaskContextItem {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  due_date: string | null;
+  project_name?: string;
+  project_id?: string | null;
+  assigned_name?: string;
 }
 
 export interface AssistantContext {
   projects?: Array<{ id: string; name: string; uses_clients?: boolean }>;
   profiles?: Array<{ id: string; display_name: string }>;
   currentWorkspace?: { id: string; name?: string } | null;
+  existingTasks?: TaskContextItem[];
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  audioData?: {
+    base64: string;
+    mimeType: string;
+  };
 }
 
 const GEMINI_API_KEY =
-  import.meta.env.VITE_GEMINI_API_KEY ||
-  import.meta.env.VITE_GOOGLE_AI_API_KEY ||
+  (import.meta.env.VITE_GEMINI_API_KEY as string) ||
+  (import.meta.env.GEMINI_API_KEY as string) ||
+  (import.meta.env.VITE_GOOGLE_AI_API_KEY as string) ||
   "";
 
 const CANDIDATE_MODELS = [
@@ -37,69 +69,177 @@ const CANDIDATE_MODELS = [
   "gemini-3-flash-preview"
 ];
 
+/**
+ * Generate a proactive smart greeting based on the current day,
+ * overdue tasks, tasks from last week, and tasks scheduled for today.
+ */
+export function generateProactiveGreeting(
+  existingTasks: TaskContextItem[] = [],
+  userName: string = 'Robinson'
+): string {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const todayStr = now.toISOString().split('T')[0];
+
+  const overdueTasks = existingTasks.filter(
+    t => t.due_date && t.due_date < todayStr && t.status !== 'completed'
+  );
+  const todayTasks = existingTasks.filter(
+    t => t.due_date === todayStr && t.status !== 'completed'
+  );
+  const weekTasks = existingTasks.filter(
+    t => t.status === 'week' && (!t.due_date || t.due_date >= todayStr)
+  );
+
+  // If today is Monday (1)
+  if (dayOfWeek === 1) {
+    if (overdueTasks.length > 0) {
+      const topOverdue = overdueTasks[0];
+      return `👋 ¡Hola ${userName}! Feliz inicio de semana.
+
+Estuve revisando tu tablero y veo que la tarea **"${topOverdue.title}"** (de la semana pasada) aún no está completada. 
+
+¿Pudiste avanzar con ella o tuviste que priorizar otra cosa? Si prefieres, dime y te ayudo a reagendarla recomendándote el mejor día de esta semana. 🗓️`;
+    }
+
+    if (todayTasks.length > 0) {
+      return `👋 ¡Hola ${userName}! Feliz lunes e inicio de semana.
+
+Para hoy tienes **${todayTasks.length} tarea${todayTasks.length > 1 ? 's' : ''}** planificada${todayTasks.length > 1 ? 's' : ''}:
+${todayTasks.slice(0, 3).map(t => `• **${t.title}** (${t.priority.toUpperCase()})`).join('\n')}
+
+¿Por cuál quieres que empecemos o prefieres dictarme nuevas prioridades por audio o texto? 🎙️`;
+    }
+
+    return `👋 ¡Hola ${userName}! Excelente inicio de semana.
+
+Tienes tu agenda despejada para comenzar. Puedes dictarme tus tareas por voz o escribir lo que necesitas coordinar para esta semana.`;
+  }
+
+  // Any other day
+  if (overdueTasks.length > 0) {
+    const topOverdue = overdueTasks[0];
+    return `👋 ¡Hola ${userName}! 
+
+Revisé tus tareas pendientes y veo que **"${topOverdue.title}"** quedó pendiente de días anteriores. 
+
+¿La pudiste realizar o necesitas que la reagendemos para hoy o más adelante en la semana?`;
+  }
+
+  if (todayTasks.length > 0) {
+    return `👋 ¡Hola ${userName}! 
+
+Para hoy tienes **${todayTasks.length} tarea${todayTasks.length > 1 ? 's' : ''}** en agenda:
+${todayTasks.slice(0, 3).map(t => `• **${t.title}** (${t.priority.toUpperCase()})`).join('\n')}
+
+¿Cómo vas con ellas o deseas reagendar o agregar algo nuevo?`;
+  }
+
+  if (weekTasks.length > 0) {
+    return `👋 ¡Hola ${userName}! Tienes **${weekTasks.length} tarea${weekTasks.length > 1 ? 's' : ''}** activas para esta semana. ¿En qué te gustaría enfocarte hoy o qué deseas registrar?`;
+  }
+
+  return `👋 ¡Hola ${userName}! Soy Nomi, tu asistente de productividad. ¿Qué tareas o proyectos organizamos hoy? Puedes escribir o enviar un audio.`;
+}
+
 export async function askGeminiAssistant(
   userMessage: string,
   context: AssistantContext = {}
 ): Promise<AIResponse> {
-  const { projects = [], profiles = [], currentWorkspace, history = [] } = context;
+  const {
+    projects = [],
+    profiles = [],
+    currentWorkspace,
+    existingTasks = [],
+    history = [],
+    audioData
+  } = context;
 
   const today = new Date().toISOString().split('T')[0];
   const dayName = new Intl.DateTimeFormat('es-ES', { weekday: 'long' }).format(new Date());
 
-  const systemInstruction = `Eres Nomi, el asistente inteligente y de productividad personal de Robinson Sánchez (Mi Sistema Operativo Personal RS / CRM).
-Tu misión es ayudar a Robinson y a su equipo a gestionar proyectos, crear tareas automáticamente, resolver dudas y optimizar su flujo de trabajo.
+  const tasksListStr = existingTasks.length > 0
+    ? existingTasks.map(t => `- [ID: "${t.id}"] "${t.title}" | Estado: "${t.status}" | Prioridad: "${t.priority}" | Fecha límite: ${t.due_date || 'Sin fecha'} | Proyecto: ${t.project_name || 'N/A'}`).join('\n')
+    : '- No hay tareas registradas';
+
+  const systemInstruction = `Eres Nomi, el asistente inteligente de productividad ejecutiva de Robinson Sánchez (RS Sistema Operativo Personal / CRM).
+Tu misión es gestionar tareas, proyectos, reagendamientos inteligentes, seguimiento diario y semanal, y optimizar el tiempo de Robinson.
 
 FECHA DE HOY: ${today} (${dayName})
 
-PROYECTOS DISPONIBLES EN EL SISTEMA:
-${projects.length > 0 ? projects.map(p => `- "${p.name}" (ID: "${p.id}", usa_clientes: ${!!p.uses_clients})`).join('\n') : '- No hay proyectos registrados aún'}
+TAREAS ACTUALES EN EL SISTEMA:
+${tasksListStr}
+
+PROYECTOS DISPONIBLES:
+${projects.length > 0 ? projects.map(p => `- "${p.name}" (ID: "${p.id}", usa_clientes: ${!!p.uses_clients})`).join('\n') : '- Sin proyectos'}
 
 MIEMBROS DEL EQUIPO:
-${profiles.length > 0 ? profiles.map(p => `- "${p.display_name}" (ID: "${p.id}")`).join('\n') : '- Robinson Sánchez (Usuario Principal)'}
+${profiles.length > 0 ? profiles.map(p => `- "${p.display_name}" (ID: "${p.id}")`).join('\n') : '- Robinson Sánchez'}
 
-WORKSPACE ACTUAL: ${currentWorkspace?.name || currentWorkspace?.id || 'Personal'}
+WORKSPACE: ${currentWorkspace?.name || 'Personal'}
 
-REGLAS DE INTERPRETACIÓN:
-1. Si el usuario pide crear, agendar o registrar una o varias tareas:
-   - Extrae el título conciso y claro.
-   - Detecta la prioridad ("high", "medium", "low"). Palabras como "urgente", "urgencia", "crítico", "ya" -> "high". Palabras como "cuando puedas", "baja" -> "low". Por defecto "medium".
-   - Detecta fechas ("hoy", "mañana", "el lunes", "en 3 días", "próxima semana"). Conviértelas a formato YYYY-MM-DD basándote en la fecha de hoy (${today}).
-   - Asigna el project_id correspondiente si coincide con el nombre o temática de los proyectos disponibles.
-   - Asigna assigned_to si menciona a algún miembro del equipo por su nombre.
-   - Si menciona un cliente y el proyecto lo requiere, llena el campo "client".
-   - Asigna status: "inbox" o "week" ("week" si es para esta semana o tiene fecha próxima).
-   - Pon action: "create_tasks".
-   - Pon needs_confirmation: false si la petición es clara y directa para crearla de inmediato, o true si hay dudas o es una lista compleja.
+CAPACIDADES Y REGLAS DE COMPORTAMIENTO:
 
-2. Si el usuario hace preguntas, pide consejos, pide resúmenes o conversa:
-   - Pon action: "chat".
-   - "tasks": []
-   - "needs_confirmation": false
-   - Responde de forma muy útil, amable, ejecutiva y en español en el campo "message".
+1. REAGENDAMIENTO INTELIGENTE Y SEGUIMIENTO SEMANAL/DIARIO:
+   - Si el usuario dice que no pudo hacer una tarea, o que tuvo que hacer otra cosa, o pide reagendar una tarea existente:
+     * Identifica cuál tarea es por su título o ID de la lista de tareas actuales.
+     * Recomienda amablemente un día de esta semana (ej. "Te sugiero pasarla al jueves que tienes menos carga").
+     * Asigna action: "reschedule_tasks".
+     * Llena "rescheduled_tasks" con [{ "id": "ID_DE_LA_TAREA", "title": "Título", "new_due_date": "YYYY-MM-DD", "new_status": "week" }].
+     * Responde con empatía y claridad en "message".
 
-FORMATO OBLIGATORIO DE RESPUESTA (SIEMPRE JSON VÁLIDO SIN MARKDOWN ADICIONAL FUERA DEL JSON):
+2. COMPLETAR TAREAS:
+   - Si el usuario dice que ya hizo la tarea, que la terminó o la completó:
+     * Asigna action: "complete_tasks".
+     * Llena "completed_tasks" con [{ "id": "ID_DE_LA_TAREA", "title": "Título" }].
+     * Felicita y confirma que fue marcada como completada en "message".
+
+3. CREAR NUEVAS TAREAS:
+   - Si el usuario dicta o escribe una o varias tareas nuevas:
+     * Extrae título conciso, prioridad ('high', 'medium', 'low'), fecha estimada (YYYY-MM-DD), project_id si coincide, y assigned_to.
+     * Asigna action: "create_tasks".
+     * Llena "tasks" con los objetos de tarea.
+
+4. AUDIO Y LENGUAJE NATURAL:
+   - Puedes recibir audio multimodal o texto. Procesa el contenido hablado con total naturalidad en español dominicano / neutro y profesional.
+
+5. FORMATO DE SALIDA (ESTRICTAMENTE JSON VÁLIDO):
 {
-  "action": "create_tasks" | "list_tasks" | "chat",
+  "action": "create_tasks" | "reschedule_tasks" | "complete_tasks" | "list_tasks" | "chat",
   "tasks": [
     {
-      "title": "Título de la tarea",
-      "project_id": "ID_DEL_PROYECTO_O_NULL",
-      "project_name": "Nombre legible del proyecto",
+      "title": "string",
+      "project_id": "string | null",
+      "project_name": "string",
       "priority": "high" | "medium" | "low",
-      "due_date": "YYYY-MM-DD" | null,
-      "assigned_to": "ID_DEL_MIEMBRO_O_NULL",
-      "assigned_name": "Nombre del asignado",
-      "client": "Nombre del cliente si aplica" | null,
+      "due_date": "YYYY-MM-DD | null",
+      "assigned_to": "string | null",
+      "assigned_name": "string",
+      "client": "string | null",
       "status": "inbox" | "week"
     }
   ],
-  "message": "Explicación amigable de lo que se comprendió o respuesta a la consulta",
+  "rescheduled_tasks": [
+    {
+      "id": "ID_EXACTO_DE_LA_TAREA_EXISTENTE",
+      "title": "Título de la tarea",
+      "new_due_date": "YYYY-MM-DD",
+      "new_status": "week"
+    }
+  ],
+  "completed_tasks": [
+    {
+      "id": "ID_EXACTO_DE_LA_TAREA_EXISTENTE",
+      "title": "Título de la tarea"
+    }
+  ],
+  "message": "Mensaje conversacional de Nomi para Robinson",
   "needs_confirmation": false
 }`;
 
   const contents: any[] = [];
 
-  // Add previous history if available (up to 6 turns)
+  // Add conversation history
   const recentHistory = history.slice(-6);
   for (const h of recentHistory) {
     contents.push({
@@ -108,10 +248,28 @@ FORMATO OBLIGATORIO DE RESPUESTA (SIEMPRE JSON VÁLIDO SIN MARKDOWN ADICIONAL FU
     });
   }
 
-  // Add current user message
+  // Current turn parts
+  const currentParts: any[] = [];
+
+  if (audioData?.base64) {
+    currentParts.push({
+      inline_data: {
+        mime_type: audioData.mimeType || 'audio/webm',
+        data: audioData.base64,
+      }
+    });
+    currentParts.push({
+      text: userMessage || 'Por favor escucha este audio y responde según las instrucciones.'
+    });
+  } else {
+    currentParts.push({
+      text: userMessage || 'Hola Nomi'
+    });
+  }
+
   contents.push({
     role: 'user',
-    parts: [{ text: userMessage }]
+    parts: currentParts,
   });
 
   let lastError: any = null;
@@ -131,7 +289,7 @@ FORMATO OBLIGATORIO DE RESPUESTA (SIEMPRE JSON VÁLIDO SIN MARKDOWN ADICIONAL FU
             },
             contents,
             generationConfig: {
-              temperature: 0.4,
+              temperature: 0.3,
               responseMimeType: "application/json",
               maxOutputTokens: 2048,
             }
@@ -143,7 +301,7 @@ FORMATO OBLIGATORIO DE RESPUESTA (SIEMPRE JSON VÁLIDO SIN MARKDOWN ADICIONAL FU
         const errorBody = await response.text();
         console.warn(`Gemini model ${modelName} returned ${response.status}:`, errorBody);
         lastError = new Error(`Error en modelo ${modelName} (${response.status})`);
-        continue; // Try next model
+        continue;
       }
 
       const data = await response.json();
@@ -160,6 +318,8 @@ FORMATO OBLIGATORIO DE RESPUESTA (SIEMPRE JSON VÁLIDO SIN MARKDOWN ADICIONAL FU
         return {
           action: parsed.action || 'chat',
           tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+          rescheduled_tasks: Array.isArray(parsed.rescheduled_tasks) ? parsed.rescheduled_tasks : [],
+          completed_tasks: Array.isArray(parsed.completed_tasks) ? parsed.completed_tasks : [],
           message: parsed.message || 'Entendido.',
           needs_confirmation: !!parsed.needs_confirmation,
         };
@@ -167,7 +327,7 @@ FORMATO OBLIGATORIO DE RESPUESTA (SIEMPRE JSON VÁLIDO SIN MARKDOWN ADICIONAL FU
         return {
           action: 'chat',
           tasks: [],
-          message: candidateText || 'No pude estructurar la respuesta, pero estoy listo para ayudarte.',
+          message: candidateText || 'Estoy lista para ayudarte con tus tareas.',
           needs_confirmation: false,
         };
       }
@@ -180,7 +340,7 @@ FORMATO OBLIGATORIO DE RESPUESTA (SIEMPRE JSON VÁLIDO SIN MARKDOWN ADICIONAL FU
   return {
     action: 'chat',
     tasks: [],
-    message: `Lo siento, ocurrió un problema con el asistente de IA: ${lastError?.message || 'Error desconocido'}.`,
+    message: `Lo siento, ocurrió un problema al conectar con Gemini: ${lastError?.message || 'Error desconocido'}.`,
     needs_confirmation: false,
     error: lastError?.message,
   };
