@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
+import { askGeminiAssistant } from '@/services/geminiAssistant';
 import { Project, Profile, Workspace, TaskPriority, TaskStatus } from '@/types/database';
 import { 
   Bot, 
@@ -162,18 +162,13 @@ export function AIAssistantChat({
     setIsLoading(true);
 
     try {
-      const { data, error } = await supabase.functions.invoke('ai-task-assistant', {
-        body: {
-          message: userMessage.content,
-          projects,
-          profiles,
-          currentWorkspace,
-        },
+      const history = messages.map(m => ({ role: m.role, content: m.content }));
+      const response = await askGeminiAssistant(userMessage.content, {
+        projects,
+        profiles,
+        currentWorkspace,
+        history,
       });
-
-      if (error) throw error;
-
-      const response = data as AIResponse;
 
       if (response.error) {
         throw new Error(response.error);
