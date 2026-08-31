@@ -1,0 +1,180 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* Personal OS Design System - Calm, Minimal, Execution-focused */
+
+@layer base {
+  :root {
+    /* Warm off-white background for reduced eye strain */
+    --background: 40 20% 98%;
+    --foreground: 220 20% 15%;
+
+    /* Cards with subtle warmth */
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 15%;
+
+    /* Popovers/Modals */
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 15%;
+
+    /* Primary action - calm slate blue */
+    --primary: 220 25% 25%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary - soft warm gray */
+    --secondary: 40 10% 94%;
+    --secondary-foreground: 220 20% 25%;
+
+    /* Muted elements */
+    --muted: 40 10% 96%;
+    --muted-foreground: 220 10% 50%;
+
+    /* Accent - warm teal for positive actions */
+    --accent: 180 30% 45%;
+    --accent-foreground: 0 0% 100%;
+
+    /* Risk/Warning - soft coral, not alarming */
+    --destructive: 12 70% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Success - calm green */
+    --success: 150 40% 45%;
+    --success-foreground: 0 0% 100%;
+
+    /* Area colors */
+    --area-personal: 280 40% 65%;
+    --area-rela: 200 70% 50%;
+    --area-nomi: 340 60% 60%;
+    --area-doktap: 160 50% 45%;
+    --area-venture: 30 70% 55%;
+
+    /* Priority indicators */
+    --priority-high: 12 70% 55%;
+    --priority-medium: 40 70% 55%;
+    --priority-low: 200 30% 60%;
+
+    /* Borders and inputs */
+    --border: 40 15% 88%;
+    --input: 40 15% 88%;
+    --ring: 220 25% 25%;
+
+    --radius: 0.75rem;
+
+    /* Sidebar (keeping for compatibility) */
+    --sidebar-background: 40 15% 97%;
+    --sidebar-foreground: 220 20% 25%;
+    --sidebar-primary: 220 25% 25%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 40 10% 94%;
+    --sidebar-accent-foreground: 220 20% 25%;
+    --sidebar-border: 40 15% 88%;
+    --sidebar-ring: 220 25% 25%;
+  }
+
+  .dark {
+    --background: 220 20% 10%;
+    --foreground: 40 10% 95%;
+
+    --card: 220 20% 13%;
+    --card-foreground: 40 10% 95%;
+
+    --popover: 220 20% 13%;
+    --popover-foreground: 40 10% 95%;
+
+    --primary: 200 60% 60%;
+    --primary-foreground: 220 20% 10%;
+
+    --secondary: 220 15% 20%;
+    --secondary-foreground: 40 10% 90%;
+
+    --muted: 220 15% 18%;
+    --muted-foreground: 220 10% 55%;
+
+    --accent: 180 40% 50%;
+    --accent-foreground: 220 20% 10%;
+
+    --destructive: 12 60% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 150 35% 50%;
+    --success-foreground: 220 20% 10%;
+
+    --border: 220 15% 20%;
+    --input: 220 15% 20%;
+    --ring: 200 60% 60%;
+
+    --sidebar-background: 220 20% 10%;
+    --sidebar-foreground: 40 10% 95%;
+    --sidebar-primary: 200 60% 60%;
+    --sidebar-primary-foreground: 220 20% 10%;
+    --sidebar-accent: 220 15% 18%;
+    --sidebar-accent-foreground: 40 10% 95%;
+    --sidebar-border: 220 15% 20%;
+    --sidebar-ring: 200 60% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Safe area insets for PWA */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0);
+  }
+
+  /* Bottom navigation safe area */
+  .pb-nav-safe {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0));
+  }
+
+  /* Header safe area for PWA standalone mode */
+  @media (display-mode: standalone) {
+    .pt-safe {
+      padding-top: max(env(safe-area-inset-top, 0), 0.75rem);
+    }
+  }
+}
+
+@layer components {
+  .task-card {
+    @apply bg-card rounded-lg border border-border p-4 transition-all duration-200;
+    @apply hover:shadow-md hover:border-primary/20;
+  }
+
+  .section-header {
+    @apply text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3;
+  }
+
+  .area-badge {
+    @apply text-xs font-medium px-2 py-0.5 rounded-full;
+  }
+
+  .priority-dot {
+    @apply w-2 h-2 rounded-full flex-shrink-0;
+  }
+
+  .action-button {
+    @apply text-xs font-medium px-2 py-1 rounded-md transition-colors;
+    @apply hover:bg-secondary;
+  }
+}

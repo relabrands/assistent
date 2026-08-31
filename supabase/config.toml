@@ -1,0 +1,19 @@
+project_id = "sezfbxhnutgcyckldjej"
+
+[functions.send-invitation-email]
+verify_jwt = false
+
+[functions.send-content-notification]
+verify_jwt = false
+
+[functions.invite-client]
+verify_jwt = false
+
+[functions.send-task-assignment-email]
+verify_jwt = false
+
+[functions.task-notifications]
+verify_jwt = false
+
+[functions.ai-task-assistant]
+verify_jwt = false
