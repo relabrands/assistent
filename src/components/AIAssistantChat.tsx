@@ -448,9 +448,6 @@ export function AIAssistantChat({
             </div>
             <p className="text-xs text-muted-foreground mt-1 truncate">Tu asistente de productividad y seguimiento</p>
           </div>
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => onOpenChange(false)}>
-            <X className="w-4 h-4" />
-          </Button>
         </div>
 
         {/* Quick Action Suggestion Chips */}

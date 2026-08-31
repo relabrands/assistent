@@ -52,9 +52,9 @@ export function DroppableSection({
     <div
       ref={setNodeRef}
       className={cn(
-        'rounded-xl p-4 md:p-5 transition-colors min-h-[120px]',
-        variant === 'warning' ? 'bg-destructive/5 border border-destructive/20' : 'bg-card border border-border',
-        isOver && 'ring-2 ring-primary/30 bg-primary/5'
+        'rounded-2xl p-4 md:p-5 transition-all duration-300 min-h-[130px] shadow-sm',
+        variant === 'warning' ? 'bg-destructive/5 border-destructive/20 border-2' : 'bg-card border-border border hover:shadow-md',
+        isOver && 'ring-2 ring-primary/40 bg-primary/5 shadow-md scale-[1.01]'
       )}
     >
       <div className="flex items-center justify-between mb-4">

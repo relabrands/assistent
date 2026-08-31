@@ -27,7 +27,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useContentItems } from '@/hooks/useContentItems';
 import { TaskStatus, Task, Profile, TaskPriority, Project } from '@/types/database';
-import { Loader2, CalendarDays, Plus } from 'lucide-react';
+import { Loader2, CalendarDays, Plus, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
 
@@ -89,6 +89,17 @@ export function Dashboard() {
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(profile);
+
+  // Sync detailTask with tasks array so subtasks updates reflect instantly
+  useEffect(() => {
+    if (detailTask) {
+      const updatedTask = tasks.find(t => t.id === detailTask.id);
+      if (updatedTask && JSON.stringify(updatedTask) !== JSON.stringify(detailTask)) {
+        setDetailTask(updatedTask);
+      }
+    }
+  }, [tasks, detailTask]);
+
   const [taskFilters, setTaskFilters] = useState<TaskFiltersState>({
     search: '',
     projectId: null,
@@ -626,6 +637,17 @@ export function Dashboard() {
           onNewTask={() => setIsModalOpen(true)}
           onOpenProfile={() => setIsProfileOpen(true)}
         />
+        
+        {/* Mobile FAB for AI */}
+        <div className="fixed bottom-24 right-4 z-50">
+          <Button 
+            size="icon" 
+            className="w-14 h-14 rounded-full shadow-xl bg-primary hover:bg-primary/90 text-primary-foreground border-2 border-background/20 animate-in slide-in-from-bottom-4 fade-in duration-300"
+            onClick={() => setIsAIOpen(true)}
+          >
+            <Sparkles className="w-6 h-6" />
+          </Button>
+        </div>
       </div>
 
       {/* Desktop Layout with Sidebar */}
