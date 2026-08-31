@@ -63,11 +63,82 @@ const GEMINI_API_KEY =
   "";
 
 const CANDIDATE_MODELS = [
-  "gemini-3.6-flash",
-  "gemini-flash-latest",
-  "gemini-3.1-flash-lite",
-  "gemini-3-flash-preview"
+  "gemini-1.5-flash",
+  "gemini-1.5-pro"
 ];
+
+/**
+ * Generate a proactive smart greeting based on the current day,
+ * overdue tasks, tasks from last week, and tasks scheduled for today.
+ */
+export function generateProactiveGreeting(
+  existingTasks: TaskContextItem[] = [],
+  userName: string = 'Robinson'
+): string {
+  const now = new Date();
+  const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const todayStr = now.toISOString().split('T')[0];
+
+  const overdueTasks = existingTasks.filter(
+    t => t.due_date && t.due_date < todayStr && t.status !== 'completed'
+  );
+  const todayTasks = existingTasks.filter(
+    t => t.due_date === todayStr && t.status !== 'completed'
+  );
+  const weekTasks = existingTasks.filter(
+    t => t.status === 'week' && (!t.due_date || t.due_date >= todayStr)
+  );
+
+  // If today is Monday (1)
+  if (dayOfWeek === 1) {
+    if (overdueTasks.length > 0) {
+      const topOverdue = overdueTasks[0];
+      return `👋 ¡Hola ${userName}! Feliz inicio de semana.
+
+Estuve revisando tu tablero y veo que la tarea **"${topOverdue.title}"** (de la semana pasada) aún no está completada. 
+
+¿Pudiste avanzar con ella o tuviste que priorizar otra cosa? Si prefieres, dime y te ayudo a reagendarla recomendándote el mejor día de esta semana. 🗓️`;
+    }
+
+    if (todayTasks.length > 0) {
+      return `👋 ¡Hola ${userName}! Feliz lunes e inicio de semana.
+
+Para hoy tienes **${todayTasks.length} tarea${todayTasks.length > 1 ? 's' : ''}** planificada${todayTasks.length > 1 ? 's' : ''}:
+${todayTasks.slice(0, 3).map(t => `• **${t.title}** (${t.priority.toUpperCase()})`).join('\n')}
+
+¿Por cuál quieres que empecemos o prefieres dictarme nuevas prioridades por audio o texto? 🎙️`;
+    }
+
+    return `👋 ¡Hola ${userName}! Excelente inicio de semana.
+
+Tienes tu agenda despejada para comenzar. Puedes dictarme tus tareas por voz o escribir lo que necesitas coordinar para esta semana.`;
+  }
+
+  // Any other day
+  if (overdueTasks.length > 0) {
+    const topOverdue = overdueTasks[0];
+    return `👋 ¡Hola ${userName}! 
+
+Revisé tus tareas pendientes y veo que **"${topOverdue.title}"** quedó pendiente de días anteriores. 
+
+¿La pudiste realizar o necesitas que la reagendemos para hoy o más adelante en la semana?`;
+  }
+
+  if (todayTasks.length > 0) {
+    return `👋 ¡Hola ${userName}! 
+
+Para hoy tienes **${todayTasks.length} tarea${todayTasks.length > 1 ? 's' : ''}** en agenda:
+${todayTasks.slice(0, 3).map(t => `• **${t.title}** (${t.priority.toUpperCase()})`).join('\n')}
+
+¿Cómo vas con ellas o deseas reagendar o agregar algo nuevo?`;
+  }
+
+  if (weekTasks.length > 0) {
+    return `👋 ¡Hola ${userName}! Tienes **${weekTasks.length} tarea${weekTasks.length > 1 ? 's' : ''}** activas para esta semana. ¿En qué te gustaría enfocarte hoy o qué deseas registrar?`;
+  }
+
+  return `👋 ¡Hola ${userName}! Soy Nomi, tu asistente de productividad. ¿Qué tareas o proyectos organizamos hoy? Puedes escribir o enviar un audio.`;
+}
 
 export async function askGeminiAssistant(
   userMessage: string,
