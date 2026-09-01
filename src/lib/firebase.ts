@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getMessaging, isSupported } from "firebase/messaging";
 
 // Your web app's Firebase configuration
 export const firebaseConfig = {
@@ -18,5 +19,13 @@ export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfi
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+
+// Initialize messaging only if supported (browser env)
+export let messaging: any = null;
+isSupported().then((supported) => {
+  if (supported) {
+    messaging = getMessaging(app);
+  }
+});
 
 export default app;
