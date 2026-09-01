@@ -1,4 +1,4 @@
-import * as functions from "firebase-functions";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as admin from "firebase-admin";
 
 admin.initializeApp();
@@ -8,7 +8,7 @@ const db = admin.firestore();
  * Cloud Function to check tasks due soon and send push notifications.
  * Runs every 2 hours.
  */
-export const checkTasksDueSoon = functions.pubsub.schedule("every 2 hours").onRun(async (context) => {
+export const checkTasksDueSoon = onSchedule("every 2 hours", async (event) => {
   const now = new Date();
   const todayStart = new Date(now.setHours(0, 0, 0, 0));
   const todayEnd = new Date(now.setHours(23, 59, 59, 999));
@@ -24,7 +24,7 @@ export const checkTasksDueSoon = functions.pubsub.schedule("every 2 hours").onRu
 
     if (tasksSnapshot.empty) {
       console.log("No pending tasks found.");
-      return null;
+      return;
     }
 
     const notificationsToSend: { token: string; title: string; body: string }[] = [];
@@ -89,9 +89,9 @@ export const checkTasksDueSoon = functions.pubsub.schedule("every 2 hours").onRu
       console.log("No notifications needed to be sent.");
     }
 
-    return null;
+    return;
   } catch (error) {
     console.error("Error checking tasks:", error);
-    return null;
+    return;
   }
 });
