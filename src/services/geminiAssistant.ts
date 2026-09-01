@@ -42,6 +42,7 @@ export interface TaskContextItem {
   project_name?: string;
   project_id?: string | null;
   assigned_name?: string;
+  subtasks?: Array<{title: string; completed: boolean}>;
 }
 
 export interface AssistantContext {
@@ -63,9 +64,9 @@ const GEMINI_API_KEY =
   "";
 
 const CANDIDATE_MODELS = [
+  "gemini-3.5-flash-lite",
   "gemini-3.5-flash",
-  "gemini-3.5-pro",
-  "gemini-3.5-flash-lite"
+  "gemini-3.5-pro"
 ];
 
 /**
@@ -158,7 +159,13 @@ export async function askGeminiAssistant(
   const dayName = new Intl.DateTimeFormat('es-ES', { weekday: 'long' }).format(new Date());
 
   const tasksListStr = existingTasks.length > 0
-    ? existingTasks.map(t => `- [ID: "${t.id}"] "${t.title}" | Estado: "${t.status}" | Prioridad: "${t.priority}" | Fecha límite: ${t.due_date || 'Sin fecha'} | Proyecto: ${t.project_name || 'N/A'}`).join('\n')
+    ? existingTasks.map(t => {
+        let subtasksStr = '';
+        if (t.subtasks && t.subtasks.length > 0) {
+          subtasksStr = ' | Subtareas: ' + t.subtasks.map(st => `[${st.completed ? 'x' : ' '}] ${st.title}`).join(', ');
+        }
+        return `- [ID: "${t.id}"] "${t.title}" | Estado: "${t.status}" | Prioridad: "${t.priority}" | Fecha límite: ${t.due_date || 'Sin fecha'}${subtasksStr}`;
+      }).join('\n')
     : '- No hay tareas registradas';
 
   const systemInstruction = `Eres Nomi, el asistente inteligente de productividad ejecutiva de Robinson Sánchez (RS Sistema Operativo Personal / CRM).

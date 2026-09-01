@@ -106,6 +106,7 @@ export function AIAssistantChat({
           project_name: project?.name,
           project_id: t.project_id,
           assigned_name: assigned?.display_name,
+          subtasks: t.subtasks?.map(st => ({ title: st.title, completed: st.completed })),
         };
       });
 
@@ -134,6 +135,7 @@ export function AIAssistantChat({
         project_name: project?.name,
         project_id: t.project_id,
         assigned_name: assigned?.display_name,
+        subtasks: t.subtasks?.map(st => ({ title: st.title, completed: st.completed })),
       };
     });
 
@@ -163,8 +165,10 @@ export function AIAssistantChat({
     if (response.rescheduled_tasks?.length > 0 && onUpdateTask) {
       for (const resched of response.rescheduled_tasks) {
         try {
+          // Fix: Ensure new_due_date is parsed to a Date object, otherwise Firestore update will crash
+          const parsedDate = resched.new_due_date ? new Date(`${resched.new_due_date}T12:00:00Z`) : null;
           await onUpdateTask(resched.id, {
-            due_date: resched.new_due_date || null,
+            due_date: parsedDate,
             status: resched.new_status || 'week',
           });
           toast.success(`Tarea reagendada: ${resched.title}`);
