@@ -35,7 +35,7 @@ export const checkTasksDueSoon = onSchedule("every 2 hours", async (event) => {
     
     subscriptionsSnapshot.forEach((doc) => {
       const data = doc.data();
-      if (data.fcmToken) {
+      if (data.fcmToken && data.enabled !== false) {
         subscriptionsMap.set(data.user_id, data.fcmToken);
       }
     });

@@ -36,7 +36,14 @@ export function ProfileSettingsModal({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { loading, updateDisplayName, uploadAvatar, removeAvatar } = useProfile(profile, onProfileUpdate);
-  const { isSupported, permission, requestPermission } = usePushNotifications(profile, tasks);
+  const { 
+    isSupported, 
+    permission, 
+    notificationsEnabled, 
+    isUpdating, 
+    toggleNotifications, 
+    sendTestNotification 
+  } = usePushNotifications(profile, tasks);
   const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
@@ -217,35 +224,48 @@ export function ProfileSettingsModal({
           {isSupported && (
             <div className="space-y-2">
               <Label>Notificaciones</Label>
-              <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
-                <div className="flex items-center gap-3">
-                  {permission === 'granted' ? (
-                    <Bell className="w-5 h-5 text-primary" />
-                  ) : (
-                    <BellOff className="w-5 h-5 text-muted-foreground" />
-                  )}
-                  <div>
-                    <p className="text-sm font-medium">
-                      {permission === 'granted' ? 'Activadas' : 'Desactivadas'}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Alertas de tareas próximas a vencer
-                    </p>
+              <div className="p-3 rounded-lg border bg-muted/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {notificationsEnabled ? (
+                      <Bell className="w-5 h-5 text-primary" />
+                    ) : (
+                      <BellOff className="w-5 h-5 text-muted-foreground" />
+                    )}
+                    <div>
+                      <p className="text-sm font-medium">
+                        {notificationsEnabled ? 'Activadas' : 'Desactivadas'}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Alertas de tareas próximas a vencer
+                      </p>
+                    </div>
                   </div>
+                  <Switch
+                    checked={notificationsEnabled}
+                    onCheckedChange={(checked) => toggleNotifications(checked)}
+                    disabled={isUpdating}
+                  />
                 </div>
-                <Switch
-                  checked={permission === 'granted'}
-                  onCheckedChange={() => {
-                    if (permission !== 'granted') {
-                      requestPermission();
-                    }
-                  }}
-                  disabled={permission === 'denied'}
-                />
+
+                {notificationsEnabled && (
+                  <div className="pt-2 border-t border-border/50 flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={sendTestNotification}
+                      className="text-xs h-8 gap-1.5"
+                    >
+                      <Bell className="w-3.5 h-3.5 text-primary" />
+                      Enviar notificación de prueba
+                    </Button>
+                  </div>
+                )}
               </div>
               {permission === 'denied' && (
-                <p className="text-xs text-muted-foreground">
-                  Las notificaciones están bloqueadas. Actívalas desde la configuración de tu navegador.
+                <p className="text-xs text-destructive">
+                  Las notificaciones están bloqueadas en tu navegador. Haz clic en el ícono de candado o configuración junto a la URL para permitirlas.
                 </p>
               )}
             </div>
