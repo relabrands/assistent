@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -71,10 +71,23 @@ export function NewTaskModalDB({
   const [projectId, setProjectId] = useState<string>('none');
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [lifeArea, setLifeArea] = useState<LifeArea>('trabajo');
-  const [assignedTo, setAssignedTo] = useState<string>('none');
+  const [assignedTo, setAssignedTo] = useState<string>(currentProfileId);
   const [dueDate, setDueDate] = useState<Date | undefined>();
   const [recurrenceType, setRecurrenceType] = useState<string>('none');
   const [client, setClient] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setTitle('');
+      setProjectId('none');
+      setPriority('medium');
+      setLifeArea('trabajo');
+      setAssignedTo(currentProfileId);
+      setDueDate(undefined);
+      setRecurrenceType('none');
+      setClient('');
+    }
+  }, [open, currentProfileId]);
 
   // Get selected project to check if it uses clients
   const selectedProject = projects.find(p => p.id === projectId);
@@ -91,7 +104,7 @@ export function NewTaskModalDB({
       title: title.trim(),
       priority,
       life_area: lifeArea,
-      assigned_to: assignedTo === 'none' ? null : assignedTo,
+      assigned_to: assignedTo,
       due_date: dueDate || null,
       project_id: projectId === 'none' ? null : projectId,
       recurrence_type: recurrenceType === 'none' ? null : recurrenceType as RecurrenceType,
@@ -102,14 +115,12 @@ export function NewTaskModalDB({
     setProjectId('none');
     setPriority('medium');
     setLifeArea('trabajo');
-    setAssignedTo('none');
+    setAssignedTo(currentProfileId);
     setDueDate(undefined);
     setRecurrenceType('none');
     setClient('');
     onOpenChange(false);
   };
-
-  const assignableProfiles = profiles.filter(p => p.id !== currentProfileId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -257,17 +268,18 @@ export function NewTaskModalDB({
             </Select>
           </div>
           
-          {assignableProfiles.length > 0 && (
+          {profiles.length > 0 && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Delegar a</Label>
+              <Label className="text-sm font-medium">Asignar a</Label>
               <Select value={assignedTo} onValueChange={setAssignedTo}>
                 <SelectTrigger className="h-10">
-                  <SelectValue placeholder="Sin delegar" />
+                  <SelectValue placeholder="Seleccionar usuario" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Sin delegar (yo)</SelectItem>
-                  {assignableProfiles.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.display_name}</SelectItem>
+                  {profiles.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.id === currentProfileId ? `${p.display_name} (Yo)` : p.display_name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
