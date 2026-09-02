@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Project, Task, Profile } from '@/types/database';
 import { Button } from '@/components/ui/button';
-import { Plus, FolderKanban } from 'lucide-react';
+import { Plus, FolderKanban, LayoutGrid, List } from 'lucide-react';
 import { ProjectCard } from './ProjectCard';
 import { ProjectModal } from './ProjectModal';
 
@@ -31,12 +31,8 @@ export function ActiveProjectsSection({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
 
-  // Filter active projects (those with non-completed tasks)
-  const activeProjects = projects.filter(project => {
-    const projectTasks = tasks.filter(t => t.project_id === project.id);
-    const hasActiveTasks = projectTasks.some(t => t.status !== 'completed');
-    return hasActiveTasks || projectTasks.length === 0; // Include projects with no tasks or active tasks
-  });
+  // All projects (not filtered by tasks)
+  const activeProjects = projects;
 
   const handleSave = (data: { name: string; description: string | null; sector: string; color: string }) => {
     if (editingProject) {
@@ -63,9 +59,11 @@ export function ActiveProjectsSection({
         <div className="flex items-center gap-2">
           <FolderKanban className="w-5 h-5 text-muted-foreground" />
           <h2 className="text-lg font-semibold">Proyectos Activos</h2>
-          <span className="text-sm text-muted-foreground">({activeProjects.length})</span>
+          <span className="text-sm text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+            {activeProjects.length}
+          </span>
         </div>
-        <Button variant="outline" size="sm" onClick={handleOpenNew} className="gap-1.5">
+        <Button onClick={handleOpenNew} size="sm" className="gap-1.5">
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">Nuevo Proyecto</span>
           <span className="sm:hidden">Nuevo</span>
@@ -73,17 +71,19 @@ export function ActiveProjectsSection({
       </div>
 
       {activeProjects.length === 0 ? (
-        <div className="bg-card rounded-xl border border-border p-8 text-center">
-          <FolderKanban className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-          <p className="text-muted-foreground">
-            Aún no tienes proyectos activos
-          </p>
-          <Button variant="outline" size="sm" onClick={handleOpenNew} className="mt-4">
+        <div className="bg-card rounded-2xl border border-border border-dashed p-12 text-center">
+          <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <FolderKanban className="w-8 h-8 text-muted-foreground" />
+          </div>
+          <h3 className="font-semibold mb-1">Aún no tienes proyectos</h3>
+          <p className="text-sm text-muted-foreground mb-4">Crea tu primer proyecto para empezar a organizar tus tareas.</p>
+          <Button onClick={handleOpenNew} className="gap-2">
+            <Plus className="w-4 h-4" />
             Crear primer proyecto
           </Button>
         </div>
       ) : (
-        <div className="grid gap-3">
+        <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
           {activeProjects.map((project) => (
             <ProjectCard
               key={project.id}
@@ -91,6 +91,7 @@ export function ActiveProjectsSection({
               tasks={tasks}
               profiles={profiles}
               onEdit={handleEdit}
+              onDelete={onDelete}
               onTaskClick={onTaskClick}
               onOpenClients={onOpenClients}
             />
@@ -109,3 +110,11 @@ export function ActiveProjectsSection({
     </div>
   );
 }
+
+import { Button } from '@/components/ui/button';
+import { Plus, FolderKanban } from 'lucide-react';
+import { ProjectCard } from './ProjectCard';
+import { ProjectModal } from './ProjectModal';
+
+interface ActiveProjectsSectionProps {
+  projects: Project[];

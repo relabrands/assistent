@@ -25,7 +25,7 @@ export function PomodoroView({ tasks, onTaskComplete }: PomodoroViewProps) {
   const currentTask = availableTasks.find(t => t.id === selectedTaskId) || null;
 
   return (
-    <div className="flex flex-col h-full max-w-4xl mx-auto py-8 px-4">
+    <div className="flex flex-col max-w-4xl mx-auto py-4 sm:py-8 px-4 pb-8 sm:pb-4">
       <div className="flex flex-col items-center text-center mb-10">
         <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-4">
           <Timer className="w-8 h-8 text-primary" />

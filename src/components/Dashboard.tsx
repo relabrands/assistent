@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { DashboardHeaderDB } from './DashboardHeaderDB';
 import { DroppableSection } from './DroppableSection';
@@ -101,15 +102,77 @@ export function Dashboard() {
     }
   }, [tasks, detailTask]);
 
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [taskFilters, setTaskFilters] = useState<TaskFiltersState>({
     search: '',
     projectId: null,
     lifeArea: null,
     priority: null,
   });
-  const [clientsProject, setClientsProject] = useState<Project | null>(null);
-  const [mobileTab, setMobileTab] = useState('home');
-  const [desktopView, setDesktopView] = useState<SidebarView>('dashboard');
+
+  // Derive active view and clients from URL
+  const getViewFromPath = (pathname: string): SidebarView => {
+    if (pathname.startsWith('/tasks')) return 'tasks';
+    if (pathname.startsWith('/calendar')) return 'calendar';
+    if (pathname.startsWith('/projects')) return 'projects';
+    if (pathname.startsWith('/focus')) return 'focus';
+    if (pathname.startsWith('/store')) return 'store';
+    if (pathname.startsWith('/clients')) return 'clients';
+    return 'dashboard';
+  };
+
+  const getMobileTabFromPath = (pathname: string): string => {
+    if (pathname.startsWith('/tasks')) return 'tasks';
+    if (pathname.startsWith('/projects')) return 'projects';
+    if (pathname.startsWith('/focus')) return 'focus';
+    if (pathname.startsWith('/clients')) return 'clients';
+    return 'home';
+  };
+
+  const desktopView = getViewFromPath(location.pathname);
+  const mobileTab = getMobileTabFromPath(location.pathname);
+
+  // Derive the active clients project from the URL path /clients/:projectId
+  const clientsProjectId = location.pathname.startsWith('/clients/')
+    ? location.pathname.split('/clients/')[1]
+    : null;
+  const clientsProject = clientsProjectId
+    ? projects.find(p => p.id === clientsProjectId) || null
+    : null;
+
+  const setDesktopView = (view: SidebarView) => {
+    const pathMap: Record<SidebarView, string> = {
+      dashboard: '/',
+      tasks: '/tasks',
+      calendar: '/calendar',
+      projects: '/projects',
+      focus: '/focus',
+      store: '/store',
+      clients: '/projects',
+    };
+    navigate(pathMap[view]);
+  };
+
+  const setMobileTab = (tab: string) => {
+    const pathMap: Record<string, string> = {
+      home: '/',
+      tasks: '/tasks',
+      projects: '/projects',
+      focus: '/focus',
+      store: '/store',
+    };
+    navigate(pathMap[tab] || '/');
+  };
+
+  const setClientsProject = (project: Project | null) => {
+    if (project) {
+      navigate(`/clients/${project.id}`);
+    } else {
+      navigate('/projects');
+    }
+  };
 
   // Apply filters to tasks
   const filteredInboxTasks = filterTasks(inboxTasks, taskFilters);
@@ -242,20 +305,8 @@ export function Dashboard() {
 
   if (!profile) return null;
 
-  // If viewing clients for a project, show ClientsView
-  if (clientsProject) {
-    return (
-      <div className="min-h-screen bg-background">
-        <div className="container max-w-5xl px-3 sm:px-4 py-3 sm:py-4 md:py-6 lg:py-10 pb-24 lg:pb-10">
-          <ClientsView 
-            project={clientsProject} 
-            profiles={profiles}
-            onBack={() => setClientsProject(null)} 
-          />
-        </div>
-      </div>
-    );
-  }
+
+
 
   // Desktop content based on sidebar view
   const renderDesktopContent = () => {
@@ -438,6 +489,18 @@ export function Dashboard() {
 
       case 'store':
         return <StoreView profile={profile} />;
+
+      case 'clients':
+        if (clientsProject) {
+          return (
+            <ClientsView 
+              project={clientsProject}
+              profiles={profiles}
+              onBack={() => setClientsProject(null)}
+            />
+          );
+        }
+        return null;
 
       default:
         return null;
@@ -635,6 +698,14 @@ export function Dashboard() {
               </div>
             )}
 
+            {mobileTab === 'clients' && clientsProject && (
+              <ClientsView
+                project={clientsProject}
+                profiles={profiles}
+                onBack={() => setClientsProject(null)}
+              />
+            )}
+
             {mobileTab === 'store' && (
               <StoreView profile={profile} />
             )}
@@ -685,6 +756,7 @@ export function Dashboard() {
                     {desktopView === 'calendar' && 'Calendario'}
                     {desktopView === 'projects' && 'Proyectos'}
                     {desktopView === 'focus' && 'Enfoque'}
+                    {desktopView === 'clients' && clientsProject && `Clientes — ${clientsProject.name}`}
                   </h1>
                 </div>
                 <Button onClick={() => setIsModalOpen(true)} size="sm">
