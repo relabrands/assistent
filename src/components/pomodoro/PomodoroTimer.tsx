@@ -88,7 +88,7 @@ export function PomodoroTimer({ currentTask, onTaskComplete }: PomodoroTimerProp
   const progress = ((totalSeconds - timeLeft) / totalSeconds) * 100;
 
   return (
-    <div className="flex flex-col items-center p-8 bg-card rounded-3xl border shadow-sm w-full max-w-md mx-auto">
+    <div className="flex flex-col items-center p-4 sm:p-8 bg-card rounded-3xl border shadow-sm w-full max-w-md mx-auto">
       {/* Mode Selector */}
       <div className="flex gap-2 p-1 bg-muted/50 rounded-full mb-8 w-full">
         {(Object.keys(MODE_TIMES) as PomodoroMode[]).map((m) => (
@@ -108,8 +108,8 @@ export function PomodoroTimer({ currentTask, onTaskComplete }: PomodoroTimerProp
       </div>
 
       {/* Timer Circle */}
-      <div className="relative w-64 h-64 flex items-center justify-center mb-8">
-        <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+      <div className="relative w-48 h-48 sm:w-64 sm:h-64 flex items-center justify-center mb-6 sm:mb-8">
+        <svg className="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 256 256">
           <circle
             cx="128"
             cy="128"
@@ -131,7 +131,7 @@ export function PomodoroTimer({ currentTask, onTaskComplete }: PomodoroTimerProp
             strokeDashoffset={2 * Math.PI * 120 * (1 - progress / 100)}
           />
         </svg>
-        <div className="text-6xl font-bold tracking-tighter tabular-nums text-foreground z-10">
+        <div className="text-4xl sm:text-6xl font-bold tracking-tighter tabular-nums text-foreground z-10">
           {formatTime(timeLeft)}
         </div>
       </div>

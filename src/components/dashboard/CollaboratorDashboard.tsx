@@ -132,19 +132,19 @@ export function CollaboratorDashboard({
                   return (
                     <div 
                       key={task.id}
-                      className="flex items-center gap-3 p-2 rounded-lg bg-muted/50 cursor-pointer hover:bg-muted/80 transition-colors"
+                      className="flex items-center gap-2 p-2 rounded-lg bg-muted/50 cursor-pointer hover:bg-muted/80 transition-colors"
                       onClick={() => onTaskClick(task)}
                     >
-                      <div className={`w-3 h-3 rounded-full shrink-0`} style={{
+                      <div className={`w-2.5 h-2.5 rounded-full shrink-0`} style={{
                         backgroundColor: project?.color || '#6366f1'
                       }} />
-                      <div className="flex-1 min-w-0">
+                      <div className="flex-1 min-w-0 overflow-hidden">
                         <p className="text-sm font-medium truncate">{task.title}</p>
                         {project && (
-                          <p className="text-xs text-muted-foreground">{project.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{project.name}</p>
                         )}
                       </div>
-                      <Badge variant={dueInfo.variant} className="shrink-0 text-xs">
+                      <Badge variant={dueInfo.variant} className="shrink-0 text-xs whitespace-nowrap ml-1">
                         {dueInfo.label}
                       </Badge>
                     </div>

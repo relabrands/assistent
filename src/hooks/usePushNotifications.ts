@@ -60,11 +60,11 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
 
       if (result === 'granted') {
         toast({
-          title: 'Notificaciones activadas',
-          description: 'Recibirás alertas en segundo plano cuando tus tareas estén por vencer.',
+          title: 'Notificaciones activadas ✅',
+          description: 'Recibirás alertas cuando tus tareas estén por vencer.',
         });
-        // Auto-save subscription when granted
-        savePushSubscription();
+        // Call directly with profile (don't rely on state update timing)
+        await savePushSubscription(profile);
         return true;
       } else {
         toast({
@@ -78,10 +78,11 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
       console.error('Error requesting permission:', error);
       return false;
     }
-  }, [isSupported, toast]);
+  }, [isSupported, toast, profile, savePushSubscription]);
 
-  const savePushSubscription = useCallback(async () => {
-    if (!profile || !isSupported || permission !== 'granted' || !messaging) return;
+  const savePushSubscription = useCallback(async (forceProfile?: typeof profile) => {
+    const activeProfile = forceProfile || profile;
+    if (!activeProfile || !isSupported || !messaging) return;
 
     try {
       // Register service worker explicitly for FCM
@@ -100,20 +101,20 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
 
       if (currentToken) {
         // Save FCM token to Firestore instead of raw push endpoints
-        await setDoc(doc(db, 'push_subscriptions', profile.id), {
-          user_id: profile.id,
+        await setDoc(doc(db, 'push_subscriptions', activeProfile.id), {
+          user_id: activeProfile.id,
           fcmToken: currentToken,
           updated_at: new Date().toISOString(),
         }, { merge: true });
         
-        console.log('FCM Token saved to push_subscriptions successfully');
+        console.log('FCM Token saved to push_subscriptions successfully:', currentToken.substring(0, 20) + '...');
       } else {
         console.log('No FCM registration token available.');
       }
     } catch (error) {
       console.error('Error saving FCM push subscription:', error);
     }
-  }, [profile, isSupported, permission]);
+  }, [profile, isSupported]);
 
   // Keep these dummy functions to prevent breaking components that use them
   const showNotification = useCallback((title: string, options?: NotificationOptions) => {

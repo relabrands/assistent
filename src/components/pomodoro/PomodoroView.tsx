@@ -26,12 +26,12 @@ export function PomodoroView({ tasks, onTaskComplete }: PomodoroViewProps) {
 
   return (
     <div className="flex flex-col max-w-4xl mx-auto py-4 sm:py-8 px-4 pb-8 sm:pb-4">
-      <div className="flex flex-col items-center text-center mb-10">
-        <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-4">
-          <Timer className="w-8 h-8 text-primary" />
+      <div className="flex flex-col items-center text-center mb-6 sm:mb-10">
+        <div className="w-12 h-12 sm:w-16 sm:h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-3 sm:mb-4">
+          <Timer className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
         </div>
-        <h2 className="text-3xl font-bold tracking-tight mb-2">Modo Enfoque</h2>
-        <p className="text-muted-foreground max-w-md">
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mb-2">Modo Enfoque</h2>
+        <p className="text-muted-foreground text-sm max-w-xs sm:max-w-md">
           Usa la técnica Pomodoro para mantener la concentración. Trabaja en intervalos de 25 minutos separados por breves descansos.
         </p>
       </div>
