@@ -110,11 +110,3 @@ export function ActiveProjectsSection({
     </div>
   );
 }
-
-import { Button } from '@/components/ui/button';
-import { Plus, FolderKanban } from 'lucide-react';
-import { ProjectCard } from './ProjectCard';
-import { ProjectModal } from './ProjectModal';
-
-interface ActiveProjectsSectionProps {
-  projects: Project[];
