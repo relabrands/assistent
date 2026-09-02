@@ -147,6 +147,17 @@ export function ClientCard({
           </div>
         )}
 
+        {/* Services */}
+        {client.services && client.services.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {client.services.map((service, idx) => (
+              <Badge key={idx} variant="outline" className="text-[10px] py-0 bg-muted/50">
+                {service}
+              </Badge>
+            ))}
+          </div>
+        )}
+
         {/* Stats */}
         <div className="flex items-center justify-between pt-2 border-t">
           <div className="flex gap-3">

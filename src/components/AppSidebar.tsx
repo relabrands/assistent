@@ -82,7 +82,7 @@ export function AppSidebar({
   const { state, toggleSidebar } = useSidebar();
   const isCollapsed = state === 'collapsed';
 
-  const clientProjects = projects.filter((p: any) => p.uses_clients);
+  const clientProjects = projects; // Show all projects in client management as requested
 
   const getInitials = (name: string) => {
     return name
@@ -149,8 +149,8 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Client Projects - Only for Admin */}
-        {isAdmin && clientProjects.length > 0 && (
+        {/* Client Projects */}
+        {clientProjects.length > 0 && (
           <SidebarGroup>
             {!isCollapsed && <SidebarGroupLabel>Gestión de Clientes</SidebarGroupLabel>}
             <SidebarGroupContent>

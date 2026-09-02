@@ -20,6 +20,7 @@ export interface Client {
   social_linkedin: string | null;
   social_youtube: string | null;
   notes: string | null;
+  services?: string[];
   created_by: string;
   created_at: string;
   updated_at: string;

@@ -63,6 +63,7 @@ export function useClients(profile: Profile | null, projectId: string | null = n
     social_linkedin?: string | null;
     social_youtube?: string | null;
     notes?: string | null;
+    services?: string[];
   }) => {
     if (!profile) return null;
 

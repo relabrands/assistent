@@ -36,6 +36,7 @@ interface ClientModalProps {
     social_linkedin?: string | null;
     social_youtube?: string | null;
     notes?: string | null;
+    services?: string[];
   }) => void;
   onDelete?: (id: string) => void;
 }
@@ -61,6 +62,7 @@ export function ClientModal({
   const [socialLinkedin, setSocialLinkedin] = useState('');
   const [socialYoutube, setSocialYoutube] = useState('');
   const [notes, setNotes] = useState('');
+  const [servicesInput, setServicesInput] = useState('');
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
@@ -78,6 +80,7 @@ export function ClientModal({
       setSocialLinkedin(client?.social_linkedin || '');
       setSocialYoutube(client?.social_youtube || '');
       setNotes(client?.notes || '');
+      setServicesInput(client?.services?.join(', ') || '');
     }
   }, [open, client]);
 
@@ -123,6 +126,7 @@ export function ClientModal({
       social_linkedin: socialLinkedin.trim() || null,
       social_youtube: socialYoutube.trim() || null,
       notes: notes.trim() || null,
+      services: servicesInput.split(',').map(s => s.trim()).filter(s => s.length > 0),
     });
 
     onOpenChange(false);
@@ -303,6 +307,17 @@ export function ClientModal({
                   />
                 </div>
               </div>
+            </div>
+
+            {/* Services */}
+            <div className="space-y-2">
+              <Label htmlFor="services">Servicios contratados</Label>
+              <Input
+                id="services"
+                value={servicesInput}
+                onChange={(e) => setServicesInput(e.target.value)}
+                placeholder="Ej: Desarrollo Web, SEO, Branding (separados por comas)"
+              />
             </div>
 
             {/* Notes */}
