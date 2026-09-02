@@ -44,42 +44,6 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
     return () => unsubscribe();
   }, [permission, toast]);
 
-  const requestPermission = useCallback(async () => {
-    if (!isSupported || !messaging) {
-      toast({
-        title: 'No soportado',
-        description: 'Las notificaciones push no están soportadas en este navegador o entorno.',
-        variant: 'destructive',
-      });
-      return false;
-    }
-
-    try {
-      const result = await Notification.requestPermission();
-      setPermission(result);
-
-      if (result === 'granted') {
-        toast({
-          title: 'Notificaciones activadas ✅',
-          description: 'Recibirás alertas cuando tus tareas estén por vencer.',
-        });
-        // Call directly with profile (don't rely on state update timing)
-        await savePushSubscription(profile);
-        return true;
-      } else {
-        toast({
-          title: 'Notificaciones bloqueadas',
-          description: 'Puedes activarlas desde la configuración de tu navegador',
-          variant: 'destructive',
-        });
-        return false;
-      }
-    } catch (error) {
-      console.error('Error requesting permission:', error);
-      return false;
-    }
-  }, [isSupported, toast, profile, savePushSubscription]);
-
   const savePushSubscription = useCallback(async (forceProfile?: typeof profile) => {
     const activeProfile = forceProfile || profile;
     if (!activeProfile || !isSupported || !messaging) return;
@@ -115,6 +79,42 @@ export function usePushNotifications(profile: Profile | null, tasks: Task[]) {
       console.error('Error saving FCM push subscription:', error);
     }
   }, [profile, isSupported]);
+
+  const requestPermission = useCallback(async () => {
+    if (!isSupported || !messaging) {
+      toast({
+        title: 'No soportado',
+        description: 'Las notificaciones push no están soportadas en este navegador o entorno.',
+        variant: 'destructive',
+      });
+      return false;
+    }
+
+    try {
+      const result = await Notification.requestPermission();
+      setPermission(result);
+
+      if (result === 'granted') {
+        toast({
+          title: 'Notificaciones activadas ✅',
+          description: 'Recibirás alertas cuando tus tareas estén por vencer.',
+        });
+        // Call directly with profile (don't rely on state update timing)
+        await savePushSubscription(profile);
+        return true;
+      } else {
+        toast({
+          title: 'Notificaciones bloqueadas',
+          description: 'Puedes activarlas desde la configuración de tu navegador',
+          variant: 'destructive',
+        });
+        return false;
+      }
+    } catch (error) {
+      console.error('Error requesting permission:', error);
+      return false;
+    }
+  }, [isSupported, toast, profile, savePushSubscription]);
 
   // Keep these dummy functions to prevent breaking components that use them
   const showNotification = useCallback((title: string, options?: NotificationOptions) => {
