@@ -1,4 +1,4 @@
-import { Home, LayoutGrid, FolderKanban, Plus, ShoppingBag } from 'lucide-react';
+import { Home, LayoutGrid, FolderKanban, Plus, ShoppingBag, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface MobileBottomNavProps {
@@ -19,6 +19,7 @@ export function MobileBottomNav({
     { id: 'tasks', label: 'Tareas', icon: LayoutGrid },
     { id: 'new', label: 'Nueva', icon: Plus, isAction: true },
     { id: 'projects', label: 'Proyectos', icon: FolderKanban },
+    { id: 'focus', label: 'Enfoque', icon: Timer },
     { id: 'store', label: 'Tienda', icon: ShoppingBag },
   ];
 

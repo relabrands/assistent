@@ -20,6 +20,7 @@ import { AdminDashboard } from './dashboard/AdminDashboard';
 import { CollaboratorDashboard } from './dashboard/CollaboratorDashboard';
 import { AppSidebar, SidebarView } from './AppSidebar';
 import { StoreView } from './store/StoreView';
+import { PomodoroView } from './pomodoro/PomodoroView';
 import { useTasksDB } from '@/hooks/useTasksDB';
 import { useProjects } from '@/hooks/useProjects';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
@@ -432,6 +433,9 @@ export function Dashboard() {
           </div>
         );
 
+      case 'focus':
+        return <PomodoroView tasks={tasks} onTaskComplete={toggleTaskComplete} />;
+
       case 'store':
         return <StoreView profile={profile} />;
 
@@ -625,6 +629,12 @@ export function Dashboard() {
               </div>
             )}
 
+            {mobileTab === 'focus' && (
+              <div className="space-y-4">
+                <PomodoroView tasks={tasks} onTaskComplete={toggleTaskComplete} />
+              </div>
+            )}
+
             {mobileTab === 'store' && (
               <StoreView profile={profile} />
             )}
@@ -674,6 +684,7 @@ export function Dashboard() {
                     {desktopView === 'tasks' && 'Tareas'}
                     {desktopView === 'calendar' && 'Calendario'}
                     {desktopView === 'projects' && 'Proyectos'}
+                    {desktopView === 'focus' && 'Enfoque'}
                   </h1>
                 </div>
                 <Button onClick={() => setIsModalOpen(true)} size="sm">

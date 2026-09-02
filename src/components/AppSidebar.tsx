@@ -13,7 +13,8 @@ import {
   UserCircle,
   LogOut,
   Sparkles,
-  ShoppingBag
+  ShoppingBag,
+  Timer
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -42,7 +43,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
-export type SidebarView = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'clients' | 'store';
+export type SidebarView = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'clients' | 'store' | 'focus';
 
 interface AppSidebarProps {
   profile: Profile;
@@ -62,6 +63,7 @@ const mainNavItems = [
   { id: 'tasks' as SidebarView, title: 'Tareas', icon: ListTodo },
   { id: 'calendar' as SidebarView, title: 'Calendario', icon: CalendarDays },
   { id: 'projects' as SidebarView, title: 'Proyectos', icon: FolderKanban },
+  { id: 'focus' as SidebarView, title: 'Enfoque', icon: Timer },
   { id: 'store' as SidebarView, title: 'Tienda', icon: ShoppingBag },
 ];
 
