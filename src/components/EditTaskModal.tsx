@@ -21,11 +21,14 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
-import { CalendarIcon, Loader2 } from 'lucide-react';
+import { CalendarIcon, Loader2, User } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { Task, TaskPriority, Profile, Project, LifeArea, TaskStatus, LIFE_AREA_LABELS, LIFE_AREA_COLORS } from '@/types/database';
+import { Client } from '@/types/content';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 
 interface EditTaskModalProps {
   open: boolean;
@@ -41,10 +44,12 @@ interface EditTaskModalProps {
     project_id?: string | null;
     status?: TaskStatus;
     client?: string | null;
+    client_id?: string | null;
   }) => Promise<boolean>;
   profiles: Profile[];
   projects: Project[];
   currentProfileId: string;
+  clients?: Client[];
 }
 
 const priorities: { value: TaskPriority; label: string }[] = [
@@ -70,6 +75,7 @@ export function EditTaskModal({
   profiles,
   projects,
   currentProfileId,
+  clients,
 }: EditTaskModalProps) {
   const [title, setTitle] = useState('');
   const [projectId, setProjectId] = useState<string>('none');
@@ -78,12 +84,31 @@ export function EditTaskModal({
   const [lifeArea, setLifeArea] = useState<LifeArea>('trabajo');
   const [assignedTo, setAssignedTo] = useState<string>('none');
   const [dueDate, setDueDate] = useState<Date | undefined>();
-  const [client, setClient] = useState('');
+  const [clientId, setClientId] = useState<string>('none');
+  const [projectClients, setProjectClients] = useState<Client[]>([]);
+  const [loadingClients, setLoadingClients] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Get selected project to check if it uses clients
-  const selectedProject = projects.find(p => p.id === projectId);
-  const showClientField = selectedProject?.uses_clients || false;
+  // Load clients when project changes (fallback if clients prop not provided)
+  useEffect(() => {
+    if (projectId === 'none') {
+      setProjectClients([]);
+      return;
+    }
+    if (clients && clients.length > 0) return;
+
+    setLoadingClients(true);
+    getDocs(query(collection(db, 'clients'), where('project_id', '==', projectId)))
+      .then((snap) => {
+        setProjectClients(snap.docs.map(d => ({ id: d.id, ...d.data() } as Client)));
+      })
+      .catch(console.error)
+      .finally(() => setLoadingClients(false));
+  }, [projectId, clients]);
+
+  const activeClients = (clients && clients.length > 0)
+    ? clients.filter(c => c.project_id === projectId)
+    : projectClients;
 
   useEffect(() => {
     if (task) {
@@ -94,19 +119,26 @@ export function EditTaskModal({
       setLifeArea(task.life_area || 'trabajo');
       setAssignedTo(task.assigned_to || 'none');
       setDueDate(task.due_date ? parseISO(task.due_date) : undefined);
-      setClient(task.client || '');
+      
+      // If task has client_id, use it; otherwise try to match by name
+      if (task.client_id) {
+        setClientId(task.client_id);
+      } else if (task.client && activeClients.length > 0) {
+        const found = activeClients.find(c => c.name === task.client || c.brand_name === task.client);
+        setClientId(found ? found.id : 'none');
+      } else {
+        setClientId('none');
+      }
     }
-  }, [task]);
+  }, [task, activeClients]);
+
+  const selectedClient = activeClients.find(c => c.id === clientId);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !task) return;
-    
-    // Validate client is provided if project uses clients
-    if (showClientField && !client.trim()) return;
 
     setSaving(true);
-
     const success = await onUpdateTask(task.id, {
       title: title.trim(),
       priority,
@@ -115,7 +147,8 @@ export function EditTaskModal({
       assigned_to: assignedTo === 'none' ? null : assignedTo,
       due_date: dueDate || null,
       project_id: projectId === 'none' ? null : projectId,
-      client: showClientField ? client.trim() : null,
+      client: selectedClient ? (selectedClient.brand_name || selectedClient.name) : null,
+      client_id: clientId === 'none' ? null : clientId,
     });
 
     setSaving(false);
@@ -202,17 +235,36 @@ export function EditTaskModal({
             </Select>
           </div>
 
-          {showClientField && (
+          {/* Client selector — shown when project is selected */}
+          {projectId !== 'none' && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">
-                Cliente <span className="text-destructive">*</span>
+              <Label className="text-sm font-medium flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-muted-foreground" />
+                Cliente <span className="text-muted-foreground font-normal">(opcional)</span>
               </Label>
-              <Input
-                value={client}
-                onChange={(e) => setClient(e.target.value)}
-                placeholder="Nombre del cliente"
-                className="h-10"
-              />
+              <Select value={clientId} onValueChange={setClientId} disabled={loadingClients && activeClients.length === 0}>
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder={loadingClients ? 'Cargando...' : 'Sin cliente'} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Sin cliente</SelectItem>
+                  {activeClients.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary shrink-0">
+                          {(c.brand_name || c.name).charAt(0).toUpperCase()}
+                        </div>
+                        <span className="truncate">{c.brand_name || c.name}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                  {activeClients.length === 0 && !loadingClients && (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">
+                      Este proyecto no tiene clientes
+                    </div>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           )}
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -10,25 +10,31 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Project, LifeArea, TaskPriority, LIFE_AREA_LABELS, LIFE_AREA_COLORS } from '@/types/database';
-import { Search, X, Filter, SlidersHorizontal } from 'lucide-react';
+import { Client } from '@/types/content';
+import { Search, X, SlidersHorizontal, User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 
 export interface TaskFiltersState {
   search: string;
   projectId: string | null;
+  clientId: string | null;
   lifeArea: LifeArea | null;
   priority: TaskPriority | null;
+  status: string | null;
 }
 
 interface TaskFiltersProps {
   filters: TaskFiltersState;
   onFiltersChange: (filters: TaskFiltersState) => void;
   projects: Project[];
+  clients?: Client[];
 }
 
 const priorities: { value: TaskPriority; label: string; color: string }[] = [
@@ -39,25 +45,48 @@ const priorities: { value: TaskPriority; label: string; color: string }[] = [
 
 const lifeAreas: LifeArea[] = ['trabajo', 'personal', 'salud', 'aprendizaje', 'finanzas'];
 
-export function TaskFilters({ filters, onFiltersChange, projects }: TaskFiltersProps) {
+export function TaskFilters({ filters, onFiltersChange, projects, clients }: TaskFiltersProps) {
   const [isOpen, setIsOpen] = useState(false);
-  
+  const [projectClients, setProjectClients] = useState<Client[]>([]);
+
+  // Load clients fallback if clients prop is not provided or empty
+  useEffect(() => {
+    if (clients && clients.length > 0) return;
+    const q = filters.projectId
+      ? query(collection(db, 'clients'), where('project_id', '==', filters.projectId))
+      : query(collection(db, 'clients'));
+    getDocs(q)
+      .then((snap) => setProjectClients(snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))))
+      .catch(console.error);
+  }, [filters.projectId, clients]);
+
+  const availableClients = (clients && clients.length > 0)
+    ? (filters.projectId ? clients.filter(c => c.project_id === filters.projectId) : clients)
+    : projectClients;
+
   const activeFiltersCount = [
     filters.projectId,
+    filters.clientId,
     filters.lifeArea,
     filters.priority,
+    filters.status,
   ].filter(Boolean).length;
 
   const clearFilters = () => {
     onFiltersChange({
       search: '',
       projectId: null,
+      clientId: null,
       lifeArea: null,
       priority: null,
+      status: null,
     });
   };
 
   const hasActiveFilters = filters.search || activeFiltersCount > 0;
+
+  const selectedProject = projects.find(p => p.id === filters.projectId);
+  const selectedClient = (clients || projectClients).find(c => c.id === filters.clientId);
 
   return (
     <div className="space-y-3">
@@ -111,13 +140,17 @@ export function TaskFilters({ filters, onFiltersChange, projects }: TaskFiltersP
       {/* Filter dropdowns */}
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CollapsibleContent>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-lg border bg-muted/30">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-3 rounded-lg border bg-muted/30">
             {/* Project filter */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Proyecto</label>
               <Select 
                 value={filters.projectId || 'all'} 
-                onValueChange={(v) => onFiltersChange({ ...filters, projectId: v === 'all' ? null : v })}
+                onValueChange={(v) => onFiltersChange({ 
+                  ...filters, 
+                  projectId: v === 'all' ? null : v,
+                  clientId: null, // reset client when project changes
+                })}
               >
                 <SelectTrigger className="h-8 text-sm">
                   <SelectValue placeholder="Todos" />
@@ -135,6 +168,44 @@ export function TaskFilters({ filters, onFiltersChange, projects }: TaskFiltersP
                       </div>
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Client filter */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                <User className="w-3 h-3" />
+                Cliente
+              </label>
+              <Select 
+                value={filters.clientId || 'all'} 
+                onValueChange={(v) => onFiltersChange({ ...filters, clientId: v === 'all' ? null : v })}
+                disabled={availableClients.length === 0}
+              >
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue placeholder={availableClients.length === 0 ? 'Sin clientes' : (filters.projectId ? 'Clientes del proyecto' : 'Todos los clientes')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos los clientes</SelectItem>
+                  {availableClients.map((c) => {
+                    const clientProj = !filters.projectId ? projects.find(p => p.id === c.project_id) : null;
+                    return (
+                      <SelectItem key={c.id} value={c.id}>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">
+                            {(c.brand_name || c.name).charAt(0).toUpperCase()}
+                          </div>
+                          <span>{c.brand_name || c.name}</span>
+                          {clientProj && (
+                            <span className="text-[10px] text-muted-foreground ml-1">
+                              ({clientProj.name})
+                            </span>
+                          )}
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -194,29 +265,53 @@ export function TaskFilters({ filters, onFiltersChange, projects }: TaskFiltersP
       {/* Active filter badges */}
       {hasActiveFilters && (
         <div className="flex flex-wrap gap-2">
+          {filters.search && (
+            <Badge variant="secondary" className="gap-1 text-xs">
+              <Search className="w-3 h-3" />
+              "{filters.search}"
+              <Button
+                variant="ghost" size="icon"
+                className="h-4 w-4 ml-1 hover:bg-transparent"
+                onClick={() => onFiltersChange({ ...filters, search: '' })}
+              >
+                <X className="w-3 h-3" />
+              </Button>
+            </Badge>
+          )}
           {filters.projectId && (
-            <Badge variant="secondary" className="gap-1">
+            <Badge variant="secondary" className="gap-1 text-xs">
               <div 
                 className="w-2 h-2 rounded-full" 
-                style={{ backgroundColor: projects.find(p => p.id === filters.projectId)?.color }}
+                style={{ backgroundColor: selectedProject?.color }}
               />
-              {projects.find(p => p.id === filters.projectId)?.name}
+              {selectedProject?.name}
               <Button
-                variant="ghost"
-                size="icon"
+                variant="ghost" size="icon"
                 className="h-4 w-4 ml-1 hover:bg-transparent"
-                onClick={() => onFiltersChange({ ...filters, projectId: null })}
+                onClick={() => onFiltersChange({ ...filters, projectId: null, clientId: null })}
+              >
+                <X className="w-3 h-3" />
+              </Button>
+            </Badge>
+          )}
+          {filters.clientId && (
+            <Badge variant="secondary" className="gap-1 text-xs">
+              <User className="w-3 h-3 text-primary" />
+              {selectedClient?.brand_name || selectedClient?.name}
+              <Button
+                variant="ghost" size="icon"
+                className="h-4 w-4 ml-1 hover:bg-transparent"
+                onClick={() => onFiltersChange({ ...filters, clientId: null })}
               >
                 <X className="w-3 h-3" />
               </Button>
             </Badge>
           )}
           {filters.lifeArea && (
-            <Badge variant="secondary" className="gap-1">
+            <Badge variant="secondary" className="gap-1 text-xs">
               {LIFE_AREA_COLORS[filters.lifeArea].icon} {LIFE_AREA_LABELS[filters.lifeArea]}
               <Button
-                variant="ghost"
-                size="icon"
+                variant="ghost" size="icon"
                 className="h-4 w-4 ml-1 hover:bg-transparent"
                 onClick={() => onFiltersChange({ ...filters, lifeArea: null })}
               >
@@ -225,11 +320,10 @@ export function TaskFilters({ filters, onFiltersChange, projects }: TaskFiltersP
             </Badge>
           )}
           {filters.priority && (
-            <Badge variant="secondary" className="gap-1">
+            <Badge variant="secondary" className="gap-1 text-xs">
               {priorities.find(p => p.value === filters.priority)?.label}
               <Button
-                variant="ghost"
-                size="icon"
+                variant="ghost" size="icon"
                 className="h-4 w-4 ml-1 hover:bg-transparent"
                 onClick={() => onFiltersChange({ ...filters, priority: null })}
               >
@@ -244,34 +338,24 @@ export function TaskFilters({ filters, onFiltersChange, projects }: TaskFiltersP
 }
 
 // Helper function to filter tasks
-export function filterTasks(
-  tasks: any[],
-  filters: TaskFiltersState
-): any[] {
+export function filterTasks(tasks: any[], filters: TaskFiltersState, clients?: Client[]): any[] {
   return tasks.filter((task) => {
-    // Search filter
     if (filters.search) {
       const searchLower = filters.search.toLowerCase();
-      if (!task.title.toLowerCase().includes(searchLower)) {
-        return false;
-      }
+      const matchTitle = task.title.toLowerCase().includes(searchLower);
+      const matchClient = task.client ? task.client.toLowerCase().includes(searchLower) : false;
+      if (!matchTitle && !matchClient) return false;
     }
-
-    // Project filter
-    if (filters.projectId && task.project_id !== filters.projectId) {
-      return false;
+    if (filters.projectId && task.project_id !== filters.projectId) return false;
+    if (filters.clientId) {
+      const matchId = task.client_id === filters.clientId;
+      const matchedClient = clients?.find(c => c.id === filters.clientId);
+      const matchName = matchedClient && task.client && (task.client === matchedClient.name || task.client === matchedClient.brand_name);
+      if (!matchId && !matchName) return false;
     }
-
-    // Life area filter
-    if (filters.lifeArea && task.life_area !== filters.lifeArea) {
-      return false;
-    }
-
-    // Priority filter
-    if (filters.priority && task.priority !== filters.priority) {
-      return false;
-    }
-
+    if (filters.lifeArea && task.life_area !== filters.lifeArea) return false;
+    if (filters.priority && task.priority !== filters.priority) return false;
+    if (filters.status && task.status !== filters.status) return false;
     return true;
   });
 }

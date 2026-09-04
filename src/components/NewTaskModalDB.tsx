@@ -21,11 +21,14 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
-import { CalendarIcon, Repeat } from 'lucide-react';
+import { CalendarIcon, Repeat, User } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { TaskPriority, Profile, Project, LifeArea, RecurrenceType, LIFE_AREA_LABELS, LIFE_AREA_COLORS, RECURRENCE_LABELS } from '@/types/database';
+import { Client } from '@/types/content';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
 
 interface NewTaskModalDBProps {
   open: boolean;
@@ -39,10 +42,12 @@ interface NewTaskModalDBProps {
     project_id: string | null;
     recurrence_type: RecurrenceType | null;
     client: string | null;
+    client_id: string | null;
   }) => void;
   profiles: Profile[];
   projects: Project[];
   currentProfileId: string;
+  clients?: Client[];
 }
 
 const recurrenceOptions: { value: RecurrenceType; label: string; icon: string }[] = [
@@ -66,6 +71,7 @@ export function NewTaskModalDB({
   profiles,
   projects,
   currentProfileId,
+  clients,
 }: NewTaskModalDBProps) {
   const [title, setTitle] = useState('');
   const [projectId, setProjectId] = useState<string>('none');
@@ -74,7 +80,9 @@ export function NewTaskModalDB({
   const [assignedTo, setAssignedTo] = useState<string>(currentProfileId);
   const [dueDate, setDueDate] = useState<Date | undefined>();
   const [recurrenceType, setRecurrenceType] = useState<string>('none');
-  const [client, setClient] = useState('');
+  const [clientId, setClientId] = useState<string>('none');
+  const [projectClients, setProjectClients] = useState<Client[]>([]);
+  const [loadingClients, setLoadingClients] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -85,20 +93,41 @@ export function NewTaskModalDB({
       setAssignedTo(currentProfileId);
       setDueDate(undefined);
       setRecurrenceType('none');
-      setClient('');
+      setClientId('none');
+      setProjectClients([]);
     }
   }, [open, currentProfileId]);
 
-  // Get selected project to check if it uses clients
-  const selectedProject = projects.find(p => p.id === projectId);
-  const showClientField = selectedProject?.uses_clients || false;
+  // Load clients when project changes
+  useEffect(() => {
+    if (projectId === 'none') {
+      setProjectClients([]);
+      setClientId('none');
+      return;
+    }
+
+    setClientId('none');
+    if (clients && clients.length > 0) return;
+
+    setLoadingClients(true);
+    getDocs(query(collection(db, 'clients'), where('project_id', '==', projectId)))
+      .then((snap) => {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client));
+        setProjectClients(items);
+      })
+      .catch(console.error)
+      .finally(() => setLoadingClients(false));
+  }, [projectId, clients]);
+
+  const activeClients = (clients && clients.length > 0)
+    ? clients.filter(c => c.project_id === projectId)
+    : projectClients;
+
+  const selectedClient = activeClients.find(c => c.id === clientId);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
-    
-    // Validate client is provided if project uses clients
-    if (showClientField && !client.trim()) return;
 
     onAddTask({
       title: title.trim(),
@@ -108,17 +137,10 @@ export function NewTaskModalDB({
       due_date: dueDate || null,
       project_id: projectId === 'none' ? null : projectId,
       recurrence_type: recurrenceType === 'none' ? null : recurrenceType as RecurrenceType,
-      client: showClientField ? client.trim() : null,
+      client: selectedClient ? (selectedClient.brand_name || selectedClient.name) : null,
+      client_id: clientId === 'none' ? null : clientId,
     });
 
-    setTitle('');
-    setProjectId('none');
-    setPriority('medium');
-    setLifeArea('trabajo');
-    setAssignedTo(currentProfileId);
-    setDueDate(undefined);
-    setRecurrenceType('none');
-    setClient('');
     onOpenChange(false);
   };
 
@@ -183,17 +205,41 @@ export function NewTaskModalDB({
             </div>
           </div>
 
-          {showClientField && (
+          {/* Client selector — only shown when project has clients */}
+          {projectId !== 'none' && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">
-                Cliente <span className="text-destructive">*</span>
+              <Label className="text-sm font-medium flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-muted-foreground" />
+                Cliente <span className="text-muted-foreground font-normal">(opcional)</span>
               </Label>
-              <Input
-                value={client}
-                onChange={(e) => setClient(e.target.value)}
-                placeholder="Nombre del cliente"
-                className="h-10"
-              />
+              <Select value={clientId} onValueChange={setClientId} disabled={loadingClients && activeClients.length === 0}>
+                <SelectTrigger className="h-10">
+                  <SelectValue placeholder={loadingClients ? 'Cargando...' : 'Sin cliente'} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Sin cliente</SelectItem>
+                  {activeClients.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary shrink-0">
+                          {(c.brand_name || c.name).charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate">{c.brand_name || c.name}</p>
+                          {c.brand_name && (
+                            <p className="text-xs text-muted-foreground truncate">{c.name}</p>
+                          )}
+                        </div>
+                      </div>
+                    </SelectItem>
+                  ))}
+                  {activeClients.length === 0 && !loadingClients && (
+                    <div className="px-3 py-2 text-sm text-muted-foreground">
+                      Este proyecto no tiene clientes
+                    </div>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           )}
 

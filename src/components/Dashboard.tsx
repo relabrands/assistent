@@ -17,6 +17,7 @@ import { TaskFilters, TaskFiltersState, filterTasks } from './TaskFilters';
 import { MyInvitationsSection } from './MyInvitationsSection';
 import { AIAssistantChat } from './AIAssistantChat';
 import { ClientsView } from './clients/ClientsView';
+import { TasksView } from './TasksView';
 import { AdminDashboard } from './dashboard/AdminDashboard';
 import { CollaboratorDashboard } from './dashboard/CollaboratorDashboard';
 import { AppSidebar, SidebarView } from './AppSidebar';
@@ -28,6 +29,7 @@ import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { useAuth } from '@/hooks/useAuth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useContentItems } from '@/hooks/useContentItems';
+import { useClients } from '@/hooks/useClients';
 import { TaskStatus, Task, Profile, TaskPriority, Project } from '@/types/database';
 import { Loader2, CalendarDays, Plus, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -81,6 +83,7 @@ export function Dashboard() {
 
   const { projects, addProject, updateProject, deleteProject } = useProjects(profile, currentWorkspace);
   const { contentItems } = useContentItems(profile, null);
+  const { clients } = useClients(profile, null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -337,116 +340,25 @@ export function Dashboard() {
 
       case 'tasks':
         return (
-          <div className="space-y-6">
-            <TaskFilters 
-              filters={taskFilters} 
-              onFiltersChange={setTaskFilters} 
-              projects={projects} 
-            />
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-            >
-              <div className="grid lg:grid-cols-2 gap-6">
-                <DroppableSection
-                  id="inbox"
-                  title="Inbox"
-                  icon="inbox"
-                  tasks={filteredInboxTasks}
-                  profiles={profiles}
-                  projects={projects}
-                  onStatusChange={updateTaskStatus}
-                  onToggleComplete={toggleTaskComplete}
-                  onDelete={deleteTask}
-                  onOpenDetail={handleOpenDetail}
-                  emptyMessage="¡Inbox vacío! Captura nuevas tareas aquí"
-                />
-                
-                <DroppableSection
-                  id="week"
-                  title="Esta semana"
-                  icon="week"
-                  tasks={filteredWeekTasks}
-                  profiles={profiles}
-                  projects={projects}
-                  maxTasks={5}
-                  onStatusChange={updateTaskStatus}
-                  onToggleComplete={toggleTaskComplete}
-                  onDelete={deleteTask}
-                  onOpenDetail={handleOpenDetail}
-                  emptyMessage="Arrastra tareas desde Inbox"
-                />
-              </div>
-              
-              <div className="grid lg:grid-cols-2 gap-6">
-                <DroppableSection
-                  id="risk"
-                  title="En riesgo"
-                  icon="risk"
-                  tasks={filteredRiskTasks}
-                  profiles={profiles}
-                  projects={projects}
-                  onStatusChange={updateTaskStatus}
-                  onToggleComplete={toggleTaskComplete}
-                  onDelete={deleteTask}
-                  onOpenDetail={handleOpenDetail}
-                  emptyMessage="Nada en riesgo 👍"
-                  variant="warning"
-                />
-                
-                <DroppableSection
-                  id="delegated"
-                  title="Delegadas"
-                  icon="delegated"
-                  tasks={filteredDelegatedTasks}
-                  profiles={profiles}
-                  projects={projects}
-                  onStatusChange={updateTaskStatus}
-                  onToggleComplete={toggleTaskComplete}
-                  onDelete={deleteTask}
-                  onOpenDetail={handleOpenDetail}
-                  emptyMessage="Sin tareas delegadas"
-                />
-              </div>
-
-              {filteredMyAssignedTasks.length > 0 && (
-                <DroppableSection
-                  id="assigned"
-                  title="Asignadas a mí"
-                  icon="assigned"
-                  tasks={filteredMyAssignedTasks}
-                  profiles={profiles}
-                  projects={projects}
-                  onStatusChange={updateTaskStatus}
-                  onToggleComplete={toggleTaskComplete}
-                  onDelete={deleteTask}
-                  onOpenDetail={handleOpenDetail}
-                  emptyMessage="Sin tareas asignadas"
-                />
-              )}
-
-              <DragOverlay>
-                {activeTask && (
-                  <DraggableTaskCard
-                    task={activeTask}
-                    profiles={profiles}
-                    projects={projects}
-                    onStatusChange={updateTaskStatus}
-                    onToggleComplete={toggleTaskComplete}
-                    onDelete={deleteTask}
-                    onOpenDetail={handleOpenDetail}
-                    isDragging
-                  />
-                )}
-              </DragOverlay>
-            </DndContext>
-            
-            <CompletedHistory
-              tasks={completedTasks}
+          <div className="h-full flex flex-col" style={{ minHeight: 0 }}>
+            <div className="mb-4 shrink-0">
+              <h1 className="text-xl font-bold flex items-center gap-2">
+                <span>Tareas</span>
+              </h1>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {tasks.filter(t => t.status !== 'completed').length} activas · {tasks.filter(t => t.status === 'completed').length} completadas
+              </p>
+            </div>
+            <TasksView
+              tasks={tasks}
               profiles={profiles}
               projects={projects}
+              clients={clients}
+              currentProfileId={currentProfile?.id || ''}
+              onUpdateTask={handleUpdateTask}
+              onDeleteTask={deleteTask}
+              onOpenEditModal={handleEditTask}
+              onOpenDetailModal={handleOpenDetail}
             />
           </div>
         );
@@ -784,6 +696,7 @@ export function Dashboard() {
         profiles={profiles}
         projects={projects}
         currentProfileId={profile.id}
+        clients={clients}
       />
 
       <EditTaskModal
@@ -794,6 +707,7 @@ export function Dashboard() {
         profiles={profiles}
         projects={projects}
         currentProfileId={profile.id}
+        clients={clients}
       />
 
       <TaskDetailModal

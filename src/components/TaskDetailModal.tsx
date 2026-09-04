@@ -12,7 +12,7 @@ import { Task, TaskNote, Profile, Project, SECTOR_LABELS, SECTOR_COLORS, LIFE_AR
 import { useTaskNotes } from '@/hooks/useTaskNotes';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { MessageSquare, Send, Trash2, Calendar, Flag, User, Pencil, CheckCircle2, Circle, ListTodo, Plus } from 'lucide-react';
+import { MessageSquare, Send, Trash2, Calendar, Flag, User, Pencil, CheckCircle2, Circle, ListTodo, Plus, Building2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface TaskDetailModalProps {
@@ -152,6 +152,13 @@ export function TaskDetailModal({
                   {SECTOR_LABELS[project.sector]}
                 </span>
               )}
+            </div>
+          )}
+
+          {task.client && (
+            <div className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-primary/10 text-primary font-medium border border-primary/20">
+              <Building2 className="w-3.5 h-3.5" />
+              <span>Cliente: {task.client}</span>
             </div>
           )}
           
