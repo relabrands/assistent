@@ -718,7 +718,7 @@ export function Dashboard() {
         projects={projects}
         currentProfile={profile}
         onEditTask={handleEditTask}
-        onUpdateTask={updateTask}
+        onUpdateTask={handleUpdateTask}
       />
 
       <WorkspaceSettingsModal

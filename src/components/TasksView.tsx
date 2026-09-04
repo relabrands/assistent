@@ -1,4 +1,22 @@
 import { useState, useMemo } from 'react';
+import { 
+  DndContext, 
+  DragEndEvent, 
+  DragStartEvent, 
+  DragOverlay, 
+  closestCenter, 
+  PointerSensor, 
+  TouchSensor, 
+  useSensor, 
+  useSensors,
+  useDroppable 
+} from '@dnd-kit/core';
+import { 
+  SortableContext, 
+  verticalListSortingStrategy, 
+  useSortable 
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Task, Profile, Project, TaskStatus } from '@/types/database';
 import { Client } from '@/types/content';
 import { TaskFilters, TaskFiltersState, filterTasks } from './TaskFilters';
@@ -19,7 +37,6 @@ import {
   LayoutGrid,
   List,
   ChevronDown,
-  ChevronRight,
   Users,
   Building2,
   Zap,
@@ -27,6 +44,7 @@ import {
   TrendingUp,
   ArrowRight,
   Sparkles,
+  GripVertical,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isToday, isPast, parseISO, isThisWeek } from 'date-fns';
@@ -38,28 +56,28 @@ const STATUS_CONFIG: Record<TaskStatus, { label: string; icon: React.ReactNode; 
   inbox: {
     label: 'Inbox',
     icon: <Inbox className="w-4 h-4" />,
-    color: 'text-slate-600',
+    color: 'text-slate-600 dark:text-slate-400',
     bgColor: 'bg-slate-50 dark:bg-slate-900/50',
     dotColor: 'bg-slate-400',
   },
   week: {
     label: 'Esta semana',
     icon: <CalendarDays className="w-4 h-4" />,
-    color: 'text-blue-600',
+    color: 'text-blue-600 dark:text-blue-400',
     bgColor: 'bg-blue-50 dark:bg-blue-900/20',
     dotColor: 'bg-blue-500',
   },
   risk: {
     label: 'En riesgo',
     icon: <AlertTriangle className="w-4 h-4" />,
-    color: 'text-amber-600',
+    color: 'text-amber-600 dark:text-amber-400',
     bgColor: 'bg-amber-50 dark:bg-amber-900/20',
     dotColor: 'bg-amber-500',
   },
   completed: {
     label: 'Completadas',
     icon: <CheckCircle2 className="w-4 h-4" />,
-    color: 'text-emerald-600',
+    color: 'text-emerald-600 dark:text-emerald-400',
     bgColor: 'bg-emerald-50 dark:bg-emerald-900/20',
     dotColor: 'bg-emerald-500',
   },
@@ -105,10 +123,26 @@ export function TasksView({
     status: null,
   });
   const [activeTab, setActiveTab] = useState<TaskStatus | 'all'>('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [viewMode, setViewMode] = useState<ViewMode>('board');
   const [groupBy, setGroupBy] = useState<GroupBy>('status');
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
 
-  // Stats
+  // DnD Sensors setup (with distance constraint to allow smooth clicks)
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 200,
+        tolerance: 6,
+      },
+    })
+  );
+
+  // Stats calculation
   const stats = useMemo(() => {
     const active = tasks.filter(t => t.status !== 'completed');
     const completedToday = tasks.filter(t => 
@@ -132,16 +166,21 @@ export function TasksView({
     };
   }, [tasks]);
 
-  // Filter tasks first
+  // Filter tasks
   const filteredByFilters = useMemo(() => filterTasks(tasks, filters, clients), [tasks, filters, clients]);
 
-  // Then by active tab (in list view)
+  // Active tab filter (for list view)
   const filteredTasks = useMemo(() => {
     if (activeTab === 'all') return filteredByFilters;
     return filteredByFilters.filter(t => t.status === activeTab);
   }, [filteredByFilters, activeTab]);
 
-  // Group tasks for list view
+  // Drag item reference for DragOverlay
+  const activeDragTask = useMemo(() => {
+    return tasks.find(t => t.id === activeDragId) || null;
+  }, [tasks, activeDragId]);
+
+  // Grouped tasks for list view
   const groupedTasks = useMemo(() => {
     if (groupBy === 'status') {
       const grouped: Record<string, Task[]> = {};
@@ -236,15 +275,43 @@ export function TasksView({
     return '';
   };
 
-  // Quick toggle task status to next
-  const advanceTaskStatus = (task: Task) => {
-    const nextMap: Record<TaskStatus, TaskStatus> = {
-      inbox: 'week',
-      week: 'completed',
-      risk: 'completed',
-      completed: 'inbox',
-    };
-    onUpdateTask(task.id, { status: nextMap[task.status] });
+  // Drag handlers
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveDragId(String(event.active.id));
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveDragId(null);
+    if (!over) return;
+
+    const taskId = String(active.id);
+    const overId = String(over.id);
+
+    let targetStatus: TaskStatus | null = null;
+
+    // Check if target is a status column
+    if (STATUSES.includes(overId as TaskStatus)) {
+      targetStatus = overId as TaskStatus;
+    } else if (overId.startsWith('stage-')) {
+      targetStatus = overId.replace('stage-', '') as TaskStatus;
+    } else {
+      // Or if dropped over another task, match that task's status
+      const overTask = tasks.find(t => t.id === overId);
+      if (overTask) {
+        targetStatus = overTask.status;
+      }
+    }
+
+    if (targetStatus) {
+      const currentTask = tasks.find(t => t.id === taskId);
+      if (currentTask && currentTask.status !== targetStatus) {
+        onUpdateTask(taskId, {
+          status: targetStatus,
+          completed_at: targetStatus === 'completed' ? new Date().toISOString() : null,
+        });
+      }
+    }
   };
 
   const handleClientTagClick = (e: React.MouseEvent, clientIdOrName: string | null) => {
@@ -258,454 +325,746 @@ export function TasksView({
   };
 
   return (
-    <div className="flex flex-col h-full gap-4 min-h-0">
-      {/* Stats Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
-        <StatCard
-          icon={<ListTodo className="w-4 h-4 text-blue-500" />}
-          label="Activas"
-          value={stats.total}
-          color="text-blue-600"
-          bg="bg-blue-50 dark:bg-blue-900/20"
-        />
-        <StatCard
-          icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-          label="Completadas hoy"
-          value={stats.completedToday}
-          color="text-emerald-600"
-          bg="bg-emerald-50 dark:bg-emerald-900/20"
-        />
-        <StatCard
-          icon={<Zap className="w-4 h-4 text-amber-500" />}
-          label="En riesgo"
-          value={stats.atRisk}
-          color="text-amber-600"
-          bg="bg-amber-50 dark:bg-amber-900/20"
-        />
-        <StatCard
-          icon={<Clock className="w-4 h-4 text-red-500" />}
-          label="Vencidas"
-          value={stats.overdue}
-          color="text-red-600"
-          bg="bg-red-50 dark:bg-red-900/20"
-        />
-      </div>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+    >
+      <div className="flex flex-col h-full gap-4 min-h-0">
+        {/* Stats Row */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
+          <StatCard
+            icon={<ListTodo className="w-4 h-4 text-blue-500" />}
+            label="Activas"
+            value={stats.total}
+            color="text-blue-600"
+            bg="bg-blue-50 dark:bg-blue-900/20"
+          />
+          <StatCard
+            icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+            label="Completadas hoy"
+            value={stats.completedToday}
+            color="text-emerald-600"
+            bg="bg-emerald-50 dark:bg-emerald-900/20"
+          />
+          <StatCard
+            icon={<Zap className="w-4 h-4 text-amber-500" />}
+            label="En riesgo"
+            value={stats.atRisk}
+            color="text-amber-600"
+            bg="bg-amber-50 dark:bg-amber-900/20"
+          />
+          <StatCard
+            icon={<Clock className="w-4 h-4 text-red-500" />}
+            label="Vencidas"
+            value={stats.overdue}
+            color="text-red-600"
+            bg="bg-red-50 dark:bg-red-900/20"
+          />
+        </div>
 
-      {/* Filters */}
-      <div className="shrink-0">
-        <TaskFilters 
-          filters={filters} 
-          onFiltersChange={setFilters} 
-          projects={projects}
-          clients={clients}
-        />
-      </div>
+        {/* Filters */}
+        <div className="shrink-0">
+          <TaskFilters 
+            filters={filters} 
+            onFiltersChange={setFilters} 
+            projects={projects}
+            clients={clients}
+          />
+        </div>
 
-      {/* Controls Bar: Tabs + View Switcher + Group by */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shrink-0">
-        {/* Status tabs (shown in list mode) */}
-        {viewMode === 'list' ? (
-          <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto">
-            <TabButton
-              active={activeTab === 'all'}
-              onClick={() => setActiveTab('all')}
-              count={tabCounts.all}
-            >
-              Todas
-            </TabButton>
-            {STATUSES.map(s => (
+        {/* Controls Bar: Tabs / Kanban info + View Switcher + Group by */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shrink-0">
+          {/* Status tabs in list mode */}
+          {viewMode === 'list' ? (
+            <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto">
               <TabButton
-                key={s}
-                active={activeTab === s}
-                onClick={() => setActiveTab(s)}
-                count={tabCounts[s]}
-                icon={STATUS_CONFIG[s].icon}
-                color={STATUS_CONFIG[s].color}
+                active={activeTab === 'all'}
+                onClick={() => setActiveTab('all')}
+                count={tabCounts.all}
               >
-                {STATUS_CONFIG[s].label}
+                Todas
               </TabButton>
-            ))}
+              {STATUSES.map(s => (
+                <TabButton
+                  key={s}
+                  active={activeTab === s}
+                  onClick={() => setActiveTab(s)}
+                  count={tabCounts[s]}
+                  icon={STATUS_CONFIG[s].icon}
+                  color={STATUS_CONFIG[s].color}
+                >
+                  {STATUS_CONFIG[s].label}
+                </TabButton>
+              ))}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium">
+              <Sparkles className="w-3.5 h-3.5 text-primary" />
+              <span>Arrastra tarjetas entre columnas para cambiar su etapa</span>
+              <Badge variant="secondary" className="h-5 px-1.5 text-xs font-semibold ml-1">
+                {filteredByFilters.length} tareas
+              </Badge>
+            </div>
+          )}
+
+          {/* View mode toggle & Group by dropdown */}
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+            {/* View mode toggle */}
+            <div className="flex items-center border rounded-lg p-0.5 bg-muted/40">
+              <Button
+                variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 px-2 text-xs gap-1"
+                onClick={() => setViewMode('list')}
+              >
+                <List className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Lista</span>
+              </Button>
+              <Button
+                variant={viewMode === 'board' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-7 px-2 text-xs gap-1"
+                onClick={() => setViewMode('board')}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Tablero</span>
+              </Button>
+            </div>
+
+            {/* Group by (in list view) */}
+            {viewMode === 'list' && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5 shrink-0 text-xs">
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    Agrupar: {groupBy === 'status' ? 'Etapa (Estado)' : groupBy === 'project' ? 'Proyecto' : groupBy === 'client' ? 'Cliente' : 'Prioridad'}
+                    <ChevronDown className="w-3 h-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setGroupBy('status')}>
+                    <ListTodo className="w-4 h-4 mr-2" /> Etapa (Estado)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setGroupBy('project')}>
+                    <LayoutGrid className="w-4 h-4 mr-2" /> Proyecto
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setGroupBy('client')}>
+                    <Users className="w-4 h-4 mr-2 text-primary" /> Cliente
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setGroupBy('priority')}>
+                    <AlertTriangle className="w-4 h-4 mr-2" /> Prioridad
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+        </div>
+
+        {/* Main View Area: List or Board */}
+        {viewMode === 'list' ? (
+          /* List Mode */
+          <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+            {Object.entries(groupedTasks).map(([key, groupTasks]) => {
+              if (groupTasks.length === 0 && groupBy !== 'status') return null;
+              const projectColor = getGroupProjectColor(key);
+              const clientObj = groupBy === 'client' ? clients.find(c => c.id === key) : null;
+              const isStageGroup = groupBy === 'status';
+
+              return (
+                <DroppableListGroup
+                  key={key}
+                  groupKey={key}
+                  isStage={isStageGroup}
+                  tasks={groupTasks}
+                  label={getGroupLabel(key)}
+                  colorDot={getGroupColor(key)}
+                  projectColor={projectColor}
+                  clientObj={clientObj}
+                  groupBg={activeTab === 'all' ? getGroupBg(key) : ''}
+                  projects={projects}
+                  profiles={profiles}
+                  filters={filters}
+                  onUpdateTask={onUpdateTask}
+                  onOpenDetailModal={onOpenDetailModal}
+                  onOpenEditModal={onOpenEditModal}
+                  onClientTagClick={handleClientTagClick}
+                />
+              );
+            })}
+
+            {filteredTasks.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">
+                  <CheckCircle2 className="w-8 h-8 text-muted-foreground" />
+                </div>
+                <p className="text-base font-medium text-muted-foreground">No hay tareas encontradas</p>
+                <p className="text-sm text-muted-foreground/70 mt-1">
+                  {Object.values(filters).some(Boolean)
+                    ? 'Prueba ajustando o limpiando los filtros'
+                    : 'Crea tu primera tarea con el botón "Nueva tarea"'}
+                </p>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium">
-            <Sparkles className="w-3.5 h-3.5 text-primary" />
-            Tablero Kanban interactivo · {filteredByFilters.length} tareas
+          /* Board (Kanban) Mode */
+          <div className="flex-1 overflow-x-auto overflow-y-hidden pb-2">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 h-full min-w-[768px]">
+              {STATUSES.map((statusKey) => {
+                const statusTasks = filteredByFilters.filter(t => t.status === statusKey);
+                return (
+                  <DroppableKanbanColumn
+                    key={statusKey}
+                    statusKey={statusKey}
+                    tasks={statusTasks}
+                    projects={projects}
+                    profiles={profiles}
+                    filters={filters}
+                    onOpenDetailModal={onOpenDetailModal}
+                    onUpdateTask={onUpdateTask}
+                    onClientTagClick={handleClientTagClick}
+                  />
+                );
+              })}
+            </div>
           </div>
         )}
-
-        {/* View mode toggle & Group by dropdown */}
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-          {/* View mode toggle */}
-          <div className="flex items-center border rounded-lg p-0.5 bg-muted/40">
-            <Button
-              variant={viewMode === 'list' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-xs gap-1"
-              onClick={() => setViewMode('list')}
-            >
-              <List className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Lista</span>
-            </Button>
-            <Button
-              variant={viewMode === 'board' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-xs gap-1"
-              onClick={() => setViewMode('board')}
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Tablero</span>
-            </Button>
-          </div>
-
-          {/* Group by (in list view) */}
-          {viewMode === 'list' && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8 gap-1.5 shrink-0 text-xs">
-                  <TrendingUp className="w-3.5 h-3.5" />
-                  Agrupar: {groupBy === 'status' ? 'Estado' : groupBy === 'project' ? 'Proyecto' : groupBy === 'client' ? 'Cliente' : 'Prioridad'}
-                  <ChevronDown className="w-3 h-3" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setGroupBy('status')}>
-                  <ListTodo className="w-4 h-4 mr-2" /> Estado
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setGroupBy('project')}>
-                  <LayoutGrid className="w-4 h-4 mr-2" /> Proyecto
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setGroupBy('client')}>
-                  <Users className="w-4 h-4 mr-2 text-primary" /> Cliente
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setGroupBy('priority')}>
-                  <AlertTriangle className="w-4 h-4 mr-2" /> Prioridad
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
       </div>
 
-      {/* Main View Area: List or Board */}
-      {viewMode === 'list' ? (
-        /* List Mode */
-        <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-          {Object.entries(groupedTasks).map(([key, groupTasks]) => {
-            if (groupTasks.length === 0) return null;
-            const projectColor = getGroupProjectColor(key);
-            const clientObj = groupBy === 'client' ? clients.find(c => c.id === key) : null;
+      {/* Floating Drag Overlay */}
+      <DragOverlay>
+        {activeDragTask && (
+          <div className="w-72 bg-card border-2 border-primary/50 rounded-xl p-3.5 shadow-2xl scale-105 rotate-1 opacity-95 pointer-events-none cursor-grabbing">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-sm font-semibold text-foreground line-clamp-2">
+                {activeDragTask.title}
+              </span>
+              <PriorityDot priority={activeDragTask.priority} />
+            </div>
+            <div className="flex items-center gap-2 mt-2 flex-wrap text-xs">
+              {activeDragTask.client && (
+                <span className="flex items-center gap-1 text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full font-medium">
+                  <Users className="w-2.5 h-2.5" />
+                  {activeDragTask.client}
+                </span>
+              )}
+              {activeDragTask.due_date && (
+                <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                  <CalendarDays className="w-2.5 h-2.5" />
+                  {new Date(activeDragTask.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
+  );
+}
 
-            return (
-              <div key={key} className="space-y-1.5">
-                {/* Group header */}
-                <div className="flex items-center gap-2 py-1">
-                  {groupBy === 'client' && clientObj ? (
-                    <div className="w-4 h-4 rounded-full bg-primary/10 flex items-center justify-center text-[9px] font-bold text-primary">
-                      {(clientObj.brand_name || clientObj.name).charAt(0).toUpperCase()}
-                    </div>
-                  ) : projectColor ? (
-                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: projectColor }} />
-                  ) : (
-                    <div className={cn('w-2.5 h-2.5 rounded-full', getGroupColor(key))} />
-                  )}
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    {getGroupLabel(key)}
-                  </span>
-                  <Badge variant="secondary" className="h-4 px-1.5 text-[10px] font-semibold ml-0.5">
-                    {groupTasks.length}
-                  </Badge>
-                  <div className="flex-1 h-px bg-border/50" />
-                </div>
+// --- Kanban Column Droppable ---
 
-                {/* Tasks container */}
-                <div className={cn('rounded-lg overflow-hidden border border-border/40', activeTab === 'all' ? getGroupBg(key) : '')}>
-                  {groupTasks.map((task) => {
-                    const project = projects.find(p => p.id === task.project_id);
-                    const assignee = profiles.find(p => p.id === task.assigned_to);
+function DroppableKanbanColumn({
+  statusKey,
+  tasks,
+  projects,
+  profiles,
+  filters,
+  onOpenDetailModal,
+  onUpdateTask,
+  onClientTagClick,
+}: {
+  statusKey: TaskStatus;
+  tasks: Task[];
+  projects: Project[];
+  profiles: Profile[];
+  filters: TaskFiltersState;
+  onOpenDetailModal?: (task: Task) => void;
+  onUpdateTask: (id: string, data: any) => Promise<boolean>;
+  onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: statusKey });
+  const config = STATUS_CONFIG[statusKey];
 
-                    return (
-                      <div
-                        key={task.id}
-                        className="group relative border-b last:border-b-0 border-border/40 bg-card hover:bg-accent/30 transition-colors cursor-pointer"
-                        onClick={() => onOpenDetailModal?.(task)}
-                      >
-                        <div className="flex items-center gap-3 px-3 py-3">
-                          {/* Status toggle */}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onUpdateTask(task.id, {
-                                status: task.status === 'completed' ? 'inbox' : 'completed',
-                              });
-                            }}
-                            className={cn(
-                              'shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110',
-                              task.status === 'completed'
-                                ? 'bg-emerald-500 border-emerald-500 text-white'
-                                : 'border-muted-foreground/40 hover:border-primary'
-                            )}
-                          >
-                            {task.status === 'completed' && (
-                              <CheckCircle2 className="w-3 h-3" />
-                            )}
-                          </button>
+  return (
+    <div 
+      ref={setNodeRef}
+      className={cn(
+        'flex flex-col h-full rounded-xl p-3 border transition-all duration-200 min-h-0',
+        config.bgColor,
+        isOver ? 'ring-2 ring-primary border-primary bg-primary/5 shadow-md scale-[1.01]' : 'border-border/50'
+      )}
+    >
+      {/* Column Header */}
+      <div className="flex items-center justify-between pb-2 mb-2 border-b border-border/40 shrink-0">
+        <div className="flex items-center gap-2">
+          <div className={cn('w-2.5 h-2.5 rounded-full', config.dotColor)} />
+          <span className="font-bold text-xs text-foreground uppercase tracking-wide">
+            {config.label}
+          </span>
+        </div>
+        <Badge variant="secondary" className="h-5 px-1.5 text-xs font-bold">
+          {tasks.length}
+        </Badge>
+      </div>
 
-                          {/* Main content */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={cn(
-                                'text-sm font-medium truncate',
-                                task.status === 'completed' && 'line-through text-muted-foreground'
-                              )}>
-                                {task.title}
-                              </span>
-                            </div>
+      {/* Task list container */}
+      <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+        <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+          {tasks.map((task) => (
+            <SortableKanbanCard
+              key={task.id}
+              task={task}
+              projects={projects}
+              profiles={profiles}
+              filters={filters}
+              onOpenDetailModal={onOpenDetailModal}
+              onUpdateTask={onUpdateTask}
+              onClientTagClick={onClientTagClick}
+            />
+          ))}
 
-                            <div className="flex items-center gap-2 mt-1 flex-wrap">
-                              {/* Project pill */}
-                              {project && groupBy !== 'project' && (
-                                <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                                  <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: project.color }} />
-                                  {project.name}
-                                </span>
-                              )}
-
-                              {/* Client pill — clickable to filter */}
-                              {task.client && (
-                                <button
-                                  onClick={(e) => handleClientTagClick(e, task.client_id || task.client)}
-                                  className={cn(
-                                    'flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full transition-all',
-                                    filters.clientId === task.client_id
-                                      ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
-                                      : 'bg-primary/10 text-primary hover:bg-primary/20 font-medium'
-                                  )}
-                                  title="Filtrar por este cliente"
-                                >
-                                  <Users className="w-2.5 h-2.5" />
-                                  {task.client}
-                                </button>
-                              )}
-
-                              {/* Due date */}
-                              {task.due_date && (
-                                <span className={cn(
-                                  'text-[11px] flex items-center gap-1',
-                                  isPast(parseISO(task.due_date)) && task.status !== 'completed'
-                                    ? 'text-red-500 font-medium'
-                                    : isToday(parseISO(task.due_date))
-                                    ? 'text-amber-500 font-medium'
-                                    : 'text-muted-foreground'
-                                  )}
-                                >
-                                  <CalendarDays className="w-2.5 h-2.5" />
-                                  {new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Right side: priority + avatar + quick action */}
-                          <div className="flex items-center gap-2 shrink-0">
-                            <PriorityDot priority={task.priority} />
-                            {assignee && (
-                              <div 
-                                title={assignee.display_name}
-                                className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary"
-                              >
-                                {assignee.display_name.charAt(0).toUpperCase()}
-                              </div>
-                            )}
-
-                            {/* Quick edit */}
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={(e) => { e.stopPropagation(); onOpenEditModal?.(task); }}
-                              title="Editar tarea"
-                            >
-                              <List className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-
-                        {/* Priority indicator bar on left edge */}
-                        <div className={cn(
-                          'absolute left-0 top-0 bottom-0 w-0.5 rounded-full',
-                          task.priority === 'high' && task.status !== 'completed' ? 'bg-red-400' :
-                          task.priority === 'medium' && task.status !== 'completed' ? 'bg-yellow-400' :
-                          task.priority === 'low' && task.status !== 'completed' ? 'bg-green-400' : 'bg-transparent'
-                        )} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-
-          {filteredTasks.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">
-                <CheckCircle2 className="w-8 h-8 text-muted-foreground" />
-              </div>
-              <p className="text-base font-medium text-muted-foreground">No hay tareas encontradas</p>
-              <p className="text-sm text-muted-foreground/70 mt-1">
-                {Object.values(filters).some(Boolean)
-                  ? 'Prueba ajustando o limpiando los filtros'
-                  : 'Crea tu primera tarea con el botón "Nueva tarea"'}
+          {tasks.length === 0 && (
+            <div className={cn(
+              "flex flex-col items-center justify-center h-32 border-2 border-dashed rounded-lg text-center p-3 transition-colors",
+              isOver ? "border-primary/60 bg-primary/10" : "border-border/40"
+            )}>
+              <p className="text-xs text-muted-foreground">
+                {isOver ? 'Soltar aquí' : 'Arrastra tareas aquí'}
               </p>
             </div>
           )}
         </div>
-      ) : (
-        /* Board (Kanban) Mode */
-        <div className="flex-1 overflow-x-auto overflow-y-hidden pb-2">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 h-full min-w-[768px]">
-            {STATUSES.map((statusKey) => {
-              const statusTasks = filteredByFilters.filter(t => t.status === statusKey);
-              const config = STATUS_CONFIG[statusKey];
+      </SortableContext>
+    </div>
+  );
+}
 
-              return (
-                <div 
-                  key={statusKey} 
-                  className="flex flex-col h-full bg-muted/30 rounded-xl p-3 border border-border/50 min-h-0"
-                >
-                  {/* Column Header */}
-                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-border/40 shrink-0">
-                    <div className="flex items-center gap-2">
-                      <div className={cn('w-2 h-2 rounded-full', config.dotColor)} />
-                      <span className="font-semibold text-xs text-foreground uppercase tracking-wide">
-                        {config.label}
-                      </span>
-                    </div>
-                    <Badge variant="secondary" className="h-5 px-1.5 text-xs font-bold">
-                      {statusTasks.length}
-                    </Badge>
-                  </div>
+// --- Sortable Kanban Card ---
 
-                  {/* Tasks in Column */}
-                  <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-                    {statusTasks.map((task) => {
-                      const project = projects.find(p => p.id === task.project_id);
-                      const assignee = profiles.find(p => p.id === task.assigned_to);
+function SortableKanbanCard({
+  task,
+  projects,
+  profiles,
+  filters,
+  onOpenDetailModal,
+  onUpdateTask,
+  onClientTagClick,
+}: {
+  task: Task;
+  projects: Project[];
+  profiles: Profile[];
+  filters: TaskFiltersState;
+  onOpenDetailModal?: (task: Task) => void;
+  onUpdateTask: (id: string, data: any) => Promise<boolean>;
+  onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: task.id });
 
-                      return (
-                        <div
-                          key={task.id}
-                          onClick={() => onOpenDetailModal?.(task)}
-                          className="group relative bg-card hover:bg-accent/40 border border-border/60 hover:border-primary/40 rounded-lg p-3 shadow-xs hover:shadow-sm transition-all cursor-pointer space-y-2"
-                        >
-                          {/* Priority color bar */}
-                          <div className={cn(
-                            'absolute left-0 top-2 bottom-2 w-1 rounded-r-full',
-                            task.priority === 'high' && task.status !== 'completed' ? 'bg-red-400' :
-                            task.priority === 'medium' && task.status !== 'completed' ? 'bg-yellow-400' :
-                            task.priority === 'low' && task.status !== 'completed' ? 'bg-green-400' : 'bg-transparent'
-                          )} />
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+  };
 
-                          <div className="flex items-start justify-between gap-2 pl-1">
-                            <span className={cn(
-                              'text-sm font-medium leading-snug',
-                              task.status === 'completed' && 'line-through text-muted-foreground'
-                            )}>
-                              {task.title}
-                            </span>
-                            <PriorityDot priority={task.priority} />
-                          </div>
+  const project = projects.find(p => p.id === task.project_id);
+  const assignee = profiles.find(p => p.id === task.assigned_to);
 
-                          {/* Meta pills */}
-                          <div className="flex flex-wrap items-center gap-1.5 pl-1">
-                            {project && (
-                              <span 
-                                className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
-                                style={{ 
-                                  backgroundColor: `${project.color}15`, 
-                                  color: project.color 
-                                }}
-                              >
-                                {project.name}
-                              </span>
-                            )}
+  const advanceTaskStatus = (t: Task) => {
+    const nextMap: Record<TaskStatus, TaskStatus> = {
+      inbox: 'week',
+      week: 'completed',
+      risk: 'completed',
+      completed: 'inbox',
+    };
+    onUpdateTask(t.id, { 
+      status: nextMap[t.status],
+      completed_at: nextMap[t.status] === 'completed' ? new Date().toISOString() : null,
+    });
+  };
 
-                            {task.client && (
-                              <button
-                                onClick={(e) => handleClientTagClick(e, task.client_id || task.client)}
-                                className={cn(
-                                  'flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full transition-all',
-                                  filters.clientId === task.client_id
-                                    ? 'bg-primary text-primary-foreground font-semibold'
-                                    : 'bg-primary/10 text-primary hover:bg-primary/20 font-medium'
-                                )}
-                                title="Filtrar por este cliente"
-                              >
-                                <Users className="w-2.5 h-2.5" />
-                                {task.client}
-                              </button>
-                            )}
-                          </div>
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      onClick={() => onOpenDetailModal?.(task)}
+      className={cn(
+        'group relative bg-card hover:bg-accent/40 border border-border/60 hover:border-primary/40 rounded-lg p-3 shadow-2xs hover:shadow-sm transition-all cursor-grab active:cursor-grabbing space-y-2',
+        isDragging && 'opacity-30 border-dashed border-primary ring-2 ring-primary/20'
+      )}
+    >
+      {/* Priority color bar */}
+      <div className={cn(
+        'absolute left-0 top-2 bottom-2 w-1 rounded-r-full',
+        task.priority === 'high' && task.status !== 'completed' ? 'bg-red-400' :
+        task.priority === 'medium' && task.status !== 'completed' ? 'bg-yellow-400' :
+        task.priority === 'low' && task.status !== 'completed' ? 'bg-green-400' : 'bg-transparent'
+      )} />
 
-                          {/* Footer: Due date + Assignee + Advance button */}
-                          <div className="flex items-center justify-between pt-1 border-t border-border/30 text-[11px] text-muted-foreground pl-1">
-                            <div>
-                              {task.due_date ? (
-                                <span className={cn(
-                                  'flex items-center gap-1',
-                                  isPast(parseISO(task.due_date)) && task.status !== 'completed'
-                                    ? 'text-red-500 font-semibold'
-                                    : isToday(parseISO(task.due_date))
-                                    ? 'text-amber-500 font-semibold'
-                                    : 'text-muted-foreground'
-                                )}>
-                                  <CalendarDays className="w-3 h-3" />
-                                  {new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
-                                </span>
-                              ) : (
-                                <span>Sin fecha</span>
-                              )}
-                            </div>
+      <div className="flex items-start justify-between gap-2 pl-1.5">
+        <span className={cn(
+          'text-sm font-medium leading-snug',
+          task.status === 'completed' && 'line-through text-muted-foreground'
+        )}>
+          {task.title}
+        </span>
+        <PriorityDot priority={task.priority} />
+      </div>
 
-                            <div className="flex items-center gap-1.5">
-                              {assignee && (
-                                <div 
-                                  title={assignee.display_name}
-                                  className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center text-[9px] font-bold text-primary"
-                                >
-                                  {assignee.display_name.charAt(0).toUpperCase()}
-                                </div>
-                              )}
-                              {/* Advance status button */}
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 text-muted-foreground hover:text-foreground opacity-60 group-hover:opacity-100"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  advanceTaskStatus(task);
-                                }}
-                                title="Avanzar estado"
-                              >
-                                <ArrowRight className="w-3 h-3" />
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+      {/* Meta pills */}
+      <div className="flex flex-wrap items-center gap-1.5 pl-1.5">
+        {project && (
+          <span 
+            className="text-[10px] px-1.5 py-0.5 rounded-full font-medium truncate max-w-[140px]"
+            style={{ 
+              backgroundColor: `${project.color}15`, 
+              color: project.color 
+            }}
+          >
+            {project.name}
+          </span>
+        )}
 
-                    {statusTasks.length === 0 && (
-                      <div className="flex flex-col items-center justify-center h-32 border-2 border-dashed border-border/40 rounded-lg text-center p-3">
-                        <p className="text-xs text-muted-foreground">Sin tareas</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+        {task.client && (
+          <button
+            onClick={(e) => onClientTagClick(e, task.client_id || task.client)}
+            className={cn(
+              'flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full transition-all truncate max-w-[130px]',
+              filters.clientId === task.client_id
+                ? 'bg-primary text-primary-foreground font-semibold'
+                : 'bg-primary/10 text-primary hover:bg-primary/20 font-medium'
+            )}
+            title="Filtrar por este cliente"
+          >
+            <Users className="w-2.5 h-2.5 shrink-0" />
+            <span className="truncate">{task.client}</span>
+          </button>
+        )}
+      </div>
+
+      {/* Footer: Due date + Assignee + Advance button */}
+      <div className="flex items-center justify-between pt-1 border-t border-border/30 text-[11px] text-muted-foreground pl-1.5">
+        <div>
+          {task.due_date ? (
+            <span className={cn(
+              'flex items-center gap-1',
+              isPast(parseISO(task.due_date)) && task.status !== 'completed'
+                ? 'text-red-500 font-semibold'
+                : isToday(parseISO(task.due_date))
+                ? 'text-amber-500 font-semibold'
+                : 'text-muted-foreground'
+            )}>
+              <CalendarDays className="w-3 h-3" />
+              {new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
+            </span>
+          ) : (
+            <span className="text-[10px] text-muted-foreground/60">Sin fecha</span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {assignee && (
+            <div 
+              title={assignee.display_name}
+              className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center text-[9px] font-bold text-primary shrink-0"
+            >
+              {assignee.display_name.charAt(0).toUpperCase()}
+            </div>
+          )}
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground opacity-70 group-hover:opacity-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              advanceTaskStatus(task);
+            }}
+            title="Avanzar etapa"
+          >
+            <ArrowRight className="w-3 h-3" />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- List Mode Droppable Group (Etapa / Project / Client / Priority) ---
+
+function DroppableListGroup({
+  groupKey,
+  isStage,
+  tasks,
+  label,
+  colorDot,
+  projectColor,
+  clientObj,
+  groupBg,
+  projects,
+  profiles,
+  filters,
+  onUpdateTask,
+  onOpenDetailModal,
+  onOpenEditModal,
+  onClientTagClick,
+}: {
+  groupKey: string;
+  isStage: boolean;
+  tasks: Task[];
+  label: string;
+  colorDot: string;
+  projectColor?: string;
+  clientObj?: Client | null;
+  groupBg: string;
+  projects: Project[];
+  profiles: Profile[];
+  filters: TaskFiltersState;
+  onUpdateTask: (id: string, data: any) => Promise<boolean>;
+  onOpenDetailModal?: (task: Task) => void;
+  onOpenEditModal?: (task: Task) => void;
+  onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+}) {
+  const droppableId = isStage ? `stage-${groupKey}` : groupKey;
+  const { setNodeRef, isOver } = useDroppable({ id: droppableId });
+
+  return (
+    <div 
+      ref={setNodeRef}
+      className={cn(
+        "space-y-1.5 p-1 rounded-xl transition-all duration-200",
+        isStage && isOver && "ring-2 ring-primary/40 bg-primary/5 shadow-xs"
+      )}
+    >
+      {/* Group header */}
+      <div className="flex items-center gap-2 py-1 px-1">
+        {clientObj ? (
+          <div className="w-4 h-4 rounded-full bg-primary/10 flex items-center justify-center text-[9px] font-bold text-primary">
+            {(clientObj.brand_name || clientObj.name).charAt(0).toUpperCase()}
+          </div>
+        ) : projectColor ? (
+          <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: projectColor }} />
+        ) : (
+          <div className={cn('w-2.5 h-2.5 rounded-full', colorDot)} />
+        )}
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          {label}
+        </span>
+        <Badge variant="secondary" className="h-4 px-1.5 text-[10px] font-semibold ml-0.5">
+          {tasks.length}
+        </Badge>
+        <div className="flex-1 h-px bg-border/50" />
+      </div>
+
+      {/* Tasks container */}
+      <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+        <div className={cn(
+          'rounded-lg overflow-hidden border border-border/40 transition-colors',
+          groupBg,
+          isOver && isStage && "border-primary/50 bg-primary/5"
+        )}>
+          {tasks.map((task) => (
+            <SortableListCard
+              key={task.id}
+              task={task}
+              projects={projects}
+              profiles={profiles}
+              filters={filters}
+              onUpdateTask={onUpdateTask}
+              onOpenDetailModal={onOpenDetailModal}
+              onOpenEditModal={onOpenEditModal}
+              onClientTagClick={onClientTagClick}
+            />
+          ))}
+
+          {tasks.length === 0 && (
+            <div className="py-5 text-center text-xs text-muted-foreground/70">
+              {isOver && isStage ? 'Soltar aquí para mover a esta etapa' : 'Sin tareas en esta etapa'}
+            </div>
+          )}
+        </div>
+      </SortableContext>
+    </div>
+  );
+}
+
+// --- Sortable List Card ---
+
+function SortableListCard({
+  task,
+  projects,
+  profiles,
+  filters,
+  onUpdateTask,
+  onOpenDetailModal,
+  onOpenEditModal,
+  onClientTagClick,
+}: {
+  task: Task;
+  projects: Project[];
+  profiles: Profile[];
+  filters: TaskFiltersState;
+  onUpdateTask: (id: string, data: any) => Promise<boolean>;
+  onOpenDetailModal?: (task: Task) => void;
+  onOpenEditModal?: (task: Task) => void;
+  onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: task.id });
+
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+  };
+
+  const project = projects.find(p => p.id === task.project_id);
+  const assignee = profiles.find(p => p.id === task.assigned_to);
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "group relative border-b last:border-b-0 border-border/40 bg-card hover:bg-accent/30 transition-colors cursor-pointer",
+        isDragging && "opacity-30 border-dashed border-primary"
+      )}
+      onClick={() => onOpenDetailModal?.(task)}
+    >
+      <div className="flex items-center gap-2.5 px-3 py-3">
+        {/* Grip handle for drag */}
+        <button
+          {...attributes}
+          {...listeners}
+          className="p-1 -ml-1 text-muted-foreground/50 hover:text-foreground cursor-grab active:cursor-grabbing touch-none shrink-0 opacity-60 group-hover:opacity-100 transition-opacity"
+          onClick={(e) => e.stopPropagation()}
+          title="Arrastrar para mover de etapa"
+        >
+          <GripVertical className="w-4 h-4" />
+        </button>
+
+        {/* Status toggle checkbox */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onUpdateTask(task.id, {
+              status: task.status === 'completed' ? 'inbox' : 'completed',
+              completed_at: task.status === 'completed' ? null : new Date().toISOString(),
+            });
+          }}
+          className={cn(
+            'shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110',
+            task.status === 'completed'
+              ? 'bg-emerald-500 border-emerald-500 text-white'
+              : 'border-muted-foreground/40 hover:border-primary'
+          )}
+        >
+          {task.status === 'completed' && (
+            <CheckCircle2 className="w-3 h-3" />
+          )}
+        </button>
+
+        {/* Main content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn(
+              'text-sm font-medium truncate',
+              task.status === 'completed' && 'line-through text-muted-foreground'
+            )}>
+              {task.title}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {/* Project pill */}
+            {project && (
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: project.color }} />
+                {project.name}
+              </span>
+            )}
+
+            {/* Client pill — clickable to filter */}
+            {task.client && (
+              <button
+                onClick={(e) => onClientTagClick(e, task.client_id || task.client)}
+                className={cn(
+                  'flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full transition-all',
+                  filters.clientId === task.client_id
+                    ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                    : 'bg-primary/10 text-primary hover:bg-primary/20 font-medium'
+                )}
+                title="Filtrar por este cliente"
+              >
+                <Users className="w-2.5 h-2.5" />
+                {task.client}
+              </button>
+            )}
+
+            {/* Due date */}
+            {task.due_date && (
+              <span className={cn(
+                'text-[11px] flex items-center gap-1',
+                isPast(parseISO(task.due_date)) && task.status !== 'completed'
+                  ? 'text-red-500 font-medium'
+                  : isToday(parseISO(task.due_date))
+                  ? 'text-amber-500 font-medium'
+                  : 'text-muted-foreground'
+              )}>
+                <CalendarDays className="w-2.5 h-2.5" />
+                {new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
+              </span>
+            )}
           </div>
         </div>
-      )}
+
+        {/* Right side: priority + avatar + quick actions */}
+        <div className="flex items-center gap-2 shrink-0">
+          <PriorityDot priority={task.priority} />
+          {assignee && (
+            <div 
+              title={assignee.display_name}
+              className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary"
+            >
+              {assignee.display_name.charAt(0).toUpperCase()}
+            </div>
+          )}
+
+          {/* Quick edit */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={(e) => { e.stopPropagation(); onOpenEditModal?.(task); }}
+            title="Editar tarea"
+          >
+            <List className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Priority indicator bar on left edge */}
+      <div className={cn(
+        'absolute left-0 top-0 bottom-0 w-0.5 rounded-full',
+        task.priority === 'high' && task.status !== 'completed' ? 'bg-red-400' :
+        task.priority === 'medium' && task.status !== 'completed' ? 'bg-yellow-400' :
+        task.priority === 'low' && task.status !== 'completed' ? 'bg-green-400' : 'bg-transparent'
+      )} />
     </div>
   );
 }
