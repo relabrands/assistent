@@ -48,7 +48,8 @@ import {
   FileVideo,
   Link2,
   Hash,
-  MessageSquare
+  MessageSquare,
+  ExternalLink
 } from 'lucide-react';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '@/integrations/firebase/client';
