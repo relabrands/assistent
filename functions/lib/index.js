@@ -33,22 +33,321 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.checkTasksDueSoon = void 0;
+exports.checkTasksDueSoon = exports.syncNotionScheduled = exports.syncNotion = void 0;
+exports.syncNotionLogic = syncNotionLogic;
 const scheduler_1 = require("firebase-functions/v2/scheduler");
+const https_1 = require("firebase-functions/v2/https");
 const admin = __importStar(require("firebase-admin"));
 admin.initializeApp();
 const db = admin.firestore();
+const NOTION_API_KEY = process.env.NOTION_API_KEY || "";
+const NOTION_VERSION = "2022-06-28";
+const KNOWN_DATABASES = [
+    { id: "2b93e626-86ed-80cf-9ed6-d2828d011a4f", title: "CEGIMED - Dr. Yilfredy Jiménez" },
+    { id: "1243e626-86ed-8050-baa6-fb1bf6687531", title: "Centro Diagnostico Bonaire" },
+    { id: "1243e626-86ed-805a-a9a4-cb38b29aee69", title: "Thrombocid" },
+    { id: "2ee3e626-86ed-80c6-a3dc-e5f5c3bb3496", title: "Lacer Odontológico" },
+    { id: "1243e626-86ed-80ef-b905-c84807c25731", title: "Ontol" },
+    { id: "18f3e626-86ed-8079-ac2f-d978ea9a4b88", title: "Secalia" },
+    { id: "1243e626-86ed-8046-b4c8-ecc0fac4c1af", title: "Pilexil" },
+    { id: "2463e626-86ed-8002-b7bf-f660be4bd521", title: "Centro Médico Hispánico" }
+];
+/**
+ * Normalizes strings for robust matching between Notion and CRM client names
+ */
+function normalizeName(str) {
+    return str
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/g, "");
+}
+/**
+ * Core Notion synchronization logic
+ */
+async function syncNotionLogic() {
+    const now = new Date();
+    // Get date in YYYY-MM-DD
+    const todayStr = now.toISOString().split("T")[0];
+    const currentMonthStr = todayStr.slice(0, 7); // "YYYY-MM"
+    const monthNames = [
+        "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+        "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+    ];
+    const currentMonthLabel = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+    console.log(`[NotionSync] Starting sync on ${todayStr} for month ${currentMonthStr}...`);
+    // 1. Fetch connected databases from Notion (with fallback to known list)
+    let databases = [];
+    try {
+        const searchRes = await fetch("https://api.notion.com/v1/search", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${NOTION_API_KEY}`,
+                "Notion-Version": NOTION_VERSION,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                filter: { value: "database", property: "object" },
+                page_size: 100
+            })
+        });
+        if (searchRes.ok) {
+            const searchData = (await searchRes.json());
+            if (searchData.results && Array.isArray(searchData.results)) {
+                databases = searchData.results.map((dbObj) => {
+                    const title = dbObj.title?.map((t) => t.plain_text || "").join("") || "Base de datos";
+                    return { id: dbObj.id, title };
+                });
+            }
+        }
+        else {
+            console.warn("[NotionSync] Search failed with status:", searchRes.status, await searchRes.text());
+        }
+    }
+    catch (err) {
+        console.error("[NotionSync] Error querying Notion search endpoint:", err);
+    }
+    // Fallback to known list if search found nothing
+    if (databases.length === 0) {
+        databases = [...KNOWN_DATABASES];
+    }
+    else {
+        // Merge known DBs if any are missing from search results
+        const foundIds = new Set(databases.map(d => d.id.replace(/-/g, "")));
+        for (const known of KNOWN_DATABASES) {
+            if (!foundIds.has(known.id.replace(/-/g, ""))) {
+                databases.push(known);
+            }
+        }
+    }
+    console.log(`[NotionSync] Discovered ${databases.length} databases in Notion.`);
+    // 2. Fetch existing CRM clients, workspaces, and tasks to deduplicate and link
+    const clientsSnap = await db.collection("clients").get();
+    const crmClients = [];
+    clientsSnap.forEach(d => {
+        crmClients.push({ id: d.id, ...d.data() });
+    });
+    const workspacesSnap = await db.collection("workspaces").limit(1).get();
+    const defaultWorkspaceId = !workspacesSnap.empty ? workspacesSnap.docs[0].id : null;
+    // Fetch all existing tasks to build a Set of already handled notion_page_ids
+    const tasksSnap = await db.collection("tasks").get();
+    const existingNotionIds = new Set();
+    tasksSnap.forEach(doc => {
+        const t = doc.data();
+        if (t.notion_page_id) {
+            existingNotionIds.add(t.notion_page_id);
+        }
+    });
+    let overdueTasksCreated = 0;
+    let quotaAlertsCreated = 0;
+    const syncResultsPerDb = [];
+    // Helper to match a client name or database title to a CRM client
+    const findMatchingClient = (name, dbId) => {
+        const norm = normalizeName(name);
+        return crmClients.find(c => (c.notion_database_id && c.notion_database_id.replace(/-/g, "") === dbId.replace(/-/g, "")) ||
+            (c.name && normalizeName(c.name) === norm) ||
+            (c.name && norm.includes(normalizeName(c.name))) ||
+            (c.name && normalizeName(c.name).includes(norm)));
+    };
+    // 3. Process each database
+    for (const dbItem of databases) {
+        const dbCleanId = dbItem.id.replace(/-/g, "");
+        let queryRes;
+        try {
+            queryRes = await fetch(`https://api.notion.com/v1/databases/${dbItem.id}/query`, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${NOTION_API_KEY}`,
+                    "Notion-Version": NOTION_VERSION,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ page_size: 100 })
+            });
+        }
+        catch (fetchErr) {
+            console.error(`[NotionSync] Network error querying DB ${dbItem.title}:`, fetchErr);
+            continue;
+        }
+        if (!queryRes.ok) {
+            console.warn(`[NotionSync] Failed querying DB ${dbItem.title} (${queryRes.status}):`, await queryRes.text());
+            continue;
+        }
+        const queryData = (await queryRes.json());
+        const pages = queryData.results || [];
+        let dbOverdueCount = 0;
+        let dbMonthPostsCount = 0;
+        // Match client
+        const matchedClient = findMatchingClient(dbItem.title, dbCleanId);
+        const clientName = matchedClient?.name || dbItem.title;
+        const clientQuota = matchedClient?.monthly_content_quota || 8; // Default 8 posts/month quota
+        for (const page of pages) {
+            const props = page.properties || {};
+            // Title
+            const title = props.Name?.title?.map((t) => t.plain_text || "").join("").trim() || "Contenido sin título";
+            // Date
+            const postDate = props["Fecha para postear"]?.date?.start || null;
+            // Status
+            const statusName = props["Estado"]?.status?.name || props["Status"]?.status?.name || "Sin estado";
+            const isPosted = statusName.toLowerCase() === "posteado";
+            // Platforms
+            const platforms = props["Plataforma"]?.multi_select?.map((p) => p.name) || [];
+            // Count current month posts
+            if (postDate && postDate.startsWith(currentMonthStr)) {
+                dbMonthPostsCount++;
+            }
+            // Check Overdue: scheduled date <= today AND not posted
+            if (postDate && postDate <= todayStr && !isPosted) {
+                dbOverdueCount++;
+                // Deduplication check
+                if (!existingNotionIds.has(page.id)) {
+                    const newTaskData = {
+                        title: `⚠️ No publicado: ${title}`,
+                        description: `El contenido "${title}" programado para el ${postDate} en ${platforms.join(", ") || "Redes"} no ha sido marcado como "Posteado" en Notion.\n\nEstado actual en Notion: ${statusName}`,
+                        status: "risk",
+                        priority: "high",
+                        client: clientName,
+                        client_id: matchedClient?.id || null,
+                        project_id: matchedClient?.project_id || null,
+                        workspace_id: matchedClient?.workspace_id || defaultWorkspaceId || null,
+                        due_date: postDate,
+                        assigned_to: "Equipo Contenido",
+                        notion_page_id: page.id,
+                        notion_database_id: dbItem.id,
+                        position: 0,
+                        subtasks: [
+                            { id: "st-1", title: "Verificar con copy/diseño", completed: false },
+                            { id: "st-2", title: "Confirmar publicación en redes", completed: false },
+                            { id: "st-3", title: "Actualizar estado en Notion a 'Posteado'", completed: false }
+                        ],
+                        notes: `Sincronizado automáticamente desde Notion.\nBase de datos: ${dbItem.title}\nEnlace directo: ${page.url || "https://notion.so"}`,
+                        created_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
+                    };
+                    await db.collection("tasks").add(newTaskData);
+                    existingNotionIds.add(page.id);
+                    overdueTasksCreated++;
+                    console.log(`[NotionSync] Created overdue task for: "${title}" (${clientName})`);
+                }
+            }
+        }
+        // Check Monthly Quota for this client/database
+        let createdQuotaAlert = false;
+        if (dbMonthPostsCount < clientQuota) {
+            const quotaDedupeKey = `quota_${normalizeName(clientName)}_${currentMonthStr}`;
+            if (!existingNotionIds.has(quotaDedupeKey)) {
+                const quotaTaskData = {
+                    title: `🚨 Alerta Volumen: ${clientName} (${dbMonthPostsCount}/${clientQuota} contenidos en ${currentMonthLabel})`,
+                    description: `El cliente ${clientName} solo tiene ${dbMonthPostsCount} contenido(s) programado(s) para ${currentMonthLabel} en Notion, por debajo de la cuota mínima de ${clientQuota} contenidos.\n\nSe requiere planificar, redactar y programar nuevos contenidos para alcanzar la meta mensual.`,
+                    status: "todo",
+                    priority: "high",
+                    client: clientName,
+                    client_id: matchedClient?.id || null,
+                    project_id: matchedClient?.project_id || null,
+                    workspace_id: matchedClient?.workspace_id || defaultWorkspaceId || null,
+                    due_date: todayStr,
+                    assigned_to: "Equipo Contenido",
+                    notion_page_id: quotaDedupeKey,
+                    notion_database_id: dbItem.id,
+                    position: 0,
+                    subtasks: [
+                        { id: "st-q1", title: `Crear propuesta de contenidos restantes (${clientQuota - dbMonthPostsCount} requeridos)`, completed: false },
+                        { id: "st-q2", title: "Aprobación interna de ideas y copys", completed: false },
+                        { id: "st-q3", title: "Programar en Notion con fechas asignadas", completed: false }
+                    ],
+                    notes: `Alerta automática de CRM generada al detectar volumen de contenidos por debajo de la cuota mensual mínima (${dbMonthPostsCount}/${clientQuota}).`,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                };
+                await db.collection("tasks").add(quotaTaskData);
+                existingNotionIds.add(quotaDedupeKey);
+                quotaAlertsCreated++;
+                createdQuotaAlert = true;
+                console.log(`[NotionSync] Created monthly quota alert for: ${clientName} (${dbMonthPostsCount}/${clientQuota})`);
+            }
+        }
+        syncResultsPerDb.push({
+            title: dbItem.title,
+            database_id: dbItem.id,
+            total_pages: pages.length,
+            month_posts_count: dbMonthPostsCount,
+            overdue_found: dbOverdueCount,
+            quota_alert: createdQuotaAlert
+        });
+    }
+    // 4. Send Push Notifications if any new alerts were generated
+    if (overdueTasksCreated > 0 || quotaAlertsCreated > 0) {
+        try {
+            const subscriptionsSnapshot = await db.collection("push_subscriptions").get();
+            const tokens = [];
+            subscriptionsSnapshot.forEach(doc => {
+                const data = doc.data();
+                if (data.fcmToken && data.enabled !== false) {
+                    tokens.push(data.fcmToken);
+                }
+            });
+            if (tokens.length > 0) {
+                const bodyMessage = [
+                    overdueTasksCreated > 0 ? `${overdueTasksCreated} contenido(s) sin publicar` : null,
+                    quotaAlertsCreated > 0 ? `${quotaAlertsCreated} alerta(s) de cuota mensual` : null
+                ].filter(Boolean).join(" y ");
+                const pushPromises = tokens.map(token => admin.messaging().send({
+                    token,
+                    notification: {
+                        title: "⚡ Notion CRM: Alertas de Contenido",
+                        body: `Se detectaron: ${bodyMessage}. Revisa la sección de Tareas.`
+                    },
+                    webpush: {
+                        fcmOptions: { link: "/tasks" }
+                    }
+                }).catch(e => console.warn("[NotionSync] FCM Push error for token:", e)));
+                await Promise.all(pushPromises);
+                console.log(`[NotionSync] Sent push notifications to ${tokens.length} devices.`);
+            }
+        }
+        catch (pushErr) {
+            console.error("[NotionSync] Error sending push notifications:", pushErr);
+        }
+    }
+    console.log(`[NotionSync] Sync completed: ${overdueTasksCreated} overdue created, ${quotaAlertsCreated} quota alerts created.`);
+    return {
+        success: true,
+        timestamp: new Date().toISOString(),
+        checkedDatabasesCount: databases.length,
+        overdueTasksCreated,
+        quotaAlertsCreated,
+        databases: syncResultsPerDb
+    };
+}
+/**
+ * Cloud Function HTTP Endpoint for on-demand sync from CRM UI
+ */
+exports.syncNotion = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
+    try {
+        const result = await syncNotionLogic();
+        res.status(200).json(result);
+    }
+    catch (error) {
+        console.error("[syncNotion HTTP] Fatal error:", error);
+        res.status(500).json({ success: false, error: error.message || "Internal server error" });
+    }
+});
+/**
+ * Scheduled Cloud Function running every 2 hours
+ */
+exports.syncNotionScheduled = (0, scheduler_1.onSchedule)("every 2 hours", async () => {
+    console.log("[syncNotionScheduled] Scheduled trigger activated.");
+    await syncNotionLogic();
+});
 /**
  * Cloud Function to check tasks due soon and send push notifications.
  * Runs every 2 hours.
  */
-exports.checkTasksDueSoon = (0, scheduler_1.onSchedule)("every 2 hours", async (event) => {
+exports.checkTasksDueSoon = (0, scheduler_1.onSchedule)("every 2 hours", async () => {
     const now = new Date();
     const todayStart = new Date(now.setHours(0, 0, 0, 0));
     const todayEnd = new Date(now.setHours(23, 59, 59, 999));
     console.log("Checking for tasks due between", todayStart, "and", todayEnd);
     try {
-        // 1. Fetch all tasks that are due today and not completed
         const tasksSnapshot = await db
             .collection("tasks")
             .where("status", "!=", "completed")
@@ -58,7 +357,6 @@ exports.checkTasksDueSoon = (0, scheduler_1.onSchedule)("every 2 hours", async (
             return;
         }
         const notificationsToSend = [];
-        // 2. Fetch all push subscriptions
         const subscriptionsSnapshot = await db.collection("push_subscriptions").get();
         const subscriptionsMap = new Map();
         subscriptionsSnapshot.forEach((doc) => {
@@ -67,13 +365,11 @@ exports.checkTasksDueSoon = (0, scheduler_1.onSchedule)("every 2 hours", async (
                 subscriptionsMap.set(data.user_id, data.fcmToken);
             }
         });
-        // 3. Process tasks and prepare notifications
         tasksSnapshot.forEach((doc) => {
             const task = doc.data();
             if (!task.due_date)
                 return;
             const dueDate = new Date(task.due_date);
-            // Check if task is due today
             if (dueDate >= todayStart && dueDate <= todayEnd) {
                 const userId = task.assigned_to;
                 const fcmToken = subscriptionsMap.get(userId);
@@ -86,7 +382,6 @@ exports.checkTasksDueSoon = (0, scheduler_1.onSchedule)("every 2 hours", async (
                 }
             }
         });
-        // 4. Send all notifications using sendEachForMulticast or send
         if (notificationsToSend.length > 0) {
             console.log(`Sending ${notificationsToSend.length} notifications...`);
             const promises = notificationsToSend.map(notification => {
@@ -98,7 +393,7 @@ exports.checkTasksDueSoon = (0, scheduler_1.onSchedule)("every 2 hours", async (
                     },
                     webpush: {
                         fcmOptions: {
-                            link: "/" // Open the app when clicked
+                            link: "/"
                         }
                     }
                 }).catch((error) => {
@@ -108,14 +403,9 @@ exports.checkTasksDueSoon = (0, scheduler_1.onSchedule)("every 2 hours", async (
             await Promise.all(promises);
             console.log("Finished sending notifications.");
         }
-        else {
-            console.log("No notifications needed to be sent.");
-        }
-        return;
     }
     catch (error) {
         console.error("Error checking tasks:", error);
-        return;
     }
 });
 //# sourceMappingURL=index.js.map

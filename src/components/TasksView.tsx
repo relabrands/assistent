@@ -101,6 +101,7 @@ interface TasksViewProps {
   onDeleteTask: (id: string) => void;
   onOpenEditModal?: (task: Task) => void;
   onOpenDetailModal?: (task: Task) => void;
+  onOpenNotion?: () => void;
 }
 
 export function TasksView({
@@ -113,6 +114,7 @@ export function TasksView({
   onDeleteTask,
   onOpenEditModal,
   onOpenDetailModal,
+  onOpenNotion,
 }: TasksViewProps) {
   const [filters, setFilters] = useState<TaskFiltersState>({
     search: '',
@@ -411,6 +413,22 @@ export function TasksView({
 
           {/* View mode toggle & Group by dropdown */}
           <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+            {onOpenNotion && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 shrink-0 text-xs border-dashed hover:border-primary/40"
+                onClick={onOpenNotion}
+                title="Integración y sincronización con Notion"
+              >
+                <div className="w-3.5 h-3.5 rounded bg-foreground text-background flex items-center justify-center font-bold text-[8px] leading-none shrink-0">
+                  N
+                </div>
+                <span>Notion</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              </Button>
+            )}
+
             {/* View mode toggle */}
             <div className="flex items-center border rounded-lg p-0.5 bg-muted/40">
               <Button
@@ -750,6 +768,15 @@ function SortableKanbanCard({
             <span className="truncate">{task.client}</span>
           </button>
         )}
+
+        {task.notion_page_id && (
+          <span 
+            className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-mono font-semibold bg-foreground/10 text-foreground shrink-0 border border-foreground/10" 
+            title="Sincronizado desde Notion"
+          >
+            <span className="font-bold">N</span> Notion
+          </span>
+        )}
       </div>
 
       {/* Footer: Due date + Assignee + Advance button */}
@@ -1014,6 +1041,15 @@ function SortableListCard({
                 <Users className="w-2.5 h-2.5" />
                 {task.client}
               </button>
+            )}
+
+            {task.notion_page_id && (
+              <span 
+                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-mono font-semibold bg-foreground/10 text-foreground shrink-0 border border-foreground/10" 
+                title="Sincronizado desde Notion"
+              >
+                <span className="font-bold">N</span> Notion
+              </span>
             )}
 
             {/* Due date */}

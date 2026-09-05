@@ -34,6 +34,7 @@ import { TaskStatus, Task, Profile, TaskPriority, Project } from '@/types/databa
 import { Loader2, CalendarDays, Plus, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
+import { NotionIntegrationModal } from './notion/NotionIntegrationModal';
 
 export function Dashboard() {
   const { profile, signOut } = useAuth();
@@ -83,13 +84,14 @@ export function Dashboard() {
 
   const { projects, addProject, updateProject, deleteProject } = useProjects(profile, currentWorkspace);
   const { contentItems } = useContentItems(profile, null);
-  const { clients } = useClients(profile, null);
+  const { clients, updateClient } = useClients(profile, null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isAIOpen, setIsAIOpen] = useState(false);
+  const [isNotionOpen, setIsNotionOpen] = useState(false);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -359,6 +361,7 @@ export function Dashboard() {
               onDeleteTask={deleteTask}
               onOpenEditModal={handleEditTask}
               onOpenDetailModal={handleOpenDetail}
+              onOpenNotion={() => setIsNotionOpen(true)}
             />
           </div>
         );
@@ -430,6 +433,7 @@ export function Dashboard() {
             currentWorkspace={currentWorkspace}
             onNewTask={() => setIsModalOpen(true)} 
             onOpenAI={() => setIsAIOpen(true)}
+            onOpenNotion={() => setIsNotionOpen(true)}
             onSignOut={handleSignOut}
             onOpenSettings={() => setIsSettingsOpen(true)}
             onOpenProfile={() => setIsProfileOpen(true)}
@@ -657,6 +661,7 @@ export function Dashboard() {
               onOpenAI={() => setIsAIOpen(true)}
               onSignOut={handleSignOut}
               onOpenClients={setClientsProject}
+              onOpenNotion={() => setIsNotionOpen(true)}
               isAdmin={isAdmin}
             />
             <SidebarInset className="flex-1">
@@ -671,10 +676,24 @@ export function Dashboard() {
                     {desktopView === 'clients' && clientsProject && `Clientes — ${clientsProject.name}`}
                   </h1>
                 </div>
-                <Button onClick={() => setIsModalOpen(true)} size="sm">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Nueva tarea
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsNotionOpen(true)}
+                    className="gap-2 text-xs border-border/80 hover:border-border"
+                  >
+                    <div className="w-3.5 h-3.5 rounded bg-foreground text-background flex items-center justify-center font-bold text-[8px] leading-none shrink-0">
+                      N
+                    </div>
+                    <span>Notion Sync</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  </Button>
+                  <Button onClick={() => setIsModalOpen(true)} size="sm">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Nueva tarea
+                  </Button>
+                </div>
               </header>
               
               <main className="p-6">
@@ -767,6 +786,15 @@ export function Dashboard() {
         onAddTasks={handleAIAddTasks}
         onUpdateTask={updateTask}
         onCompleteTask={toggleTaskComplete}
+      />
+
+      <NotionIntegrationModal
+        isOpen={isNotionOpen}
+        onClose={() => setIsNotionOpen(false)}
+        profile={currentProfile || profile}
+        currentWorkspace={currentWorkspace}
+        clients={clients}
+        onUpdateClient={updateClient}
       />
     </div>
   );

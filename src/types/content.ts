@@ -21,6 +21,8 @@ export interface Client {
   social_youtube: string | null;
   notes: string | null;
   services?: string[];
+  monthly_content_quota?: number;
+  notion_database_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;

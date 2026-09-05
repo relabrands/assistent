@@ -89,6 +89,8 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     recurrence_type?: RecurrenceType | null;
     client?: string | null;
     client_id?: string | null;
+    notion_page_id?: string | null;
+    notion_database_id?: string | null;
     recurrence_parent_id?: string | null;
     status?: TaskStatus;
   }) => {
@@ -107,6 +109,8 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
         recurrence_parent_id: taskData.recurrence_parent_id || null,
         client: taskData.client || null,
         client_id: taskData.client_id || null,
+        notion_page_id: taskData.notion_page_id || null,
+        notion_database_id: taskData.notion_database_id || null,
         created_by: profile.id,
         status: taskData.status || 'inbox',
         position: 0,
@@ -138,6 +142,8 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     workspace_id?: string | null;
     client?: string | null;
     client_id?: string | null;
+    notion_page_id?: string | null;
+    notion_database_id?: string | null;
     subtasks?: Subtask[];
   }) => {
     const updates: any = {
@@ -152,6 +158,8 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     if (taskData.workspace_id !== undefined) updates.workspace_id = taskData.workspace_id;
     if (taskData.client !== undefined) updates.client = taskData.client;
     if (taskData.client_id !== undefined) updates.client_id = taskData.client_id;
+    if (taskData.notion_page_id !== undefined) updates.notion_page_id = taskData.notion_page_id;
+    if (taskData.notion_database_id !== undefined) updates.notion_database_id = taskData.notion_database_id;
     if (taskData.subtasks !== undefined) updates.subtasks = taskData.subtasks;
     if (taskData.due_date !== undefined) {
       updates.due_date = taskData.due_date?.toISOString() || null;

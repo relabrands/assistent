@@ -67,6 +67,8 @@ export interface Task {
   recurrence_parent_id: string | null;
   client: string | null;
   client_id: string | null;
+  notion_page_id?: string | null;
+  notion_database_id?: string | null;
   subtasks?: Subtask[];
   created_at: string;
   updated_at: string;

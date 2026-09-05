@@ -23,6 +23,7 @@ interface DashboardHeaderDBProps {
   currentWorkspace: Workspace | null;
   onNewTask: () => void;
   onOpenAI: () => void;
+  onOpenNotion?: () => void;
   onSignOut: () => void;
   onOpenSettings?: () => void;
   onOpenProfile?: () => void;
@@ -35,6 +36,7 @@ export function DashboardHeaderDB({
   currentWorkspace,
   onNewTask, 
   onOpenAI,
+  onOpenNotion,
   onSignOut, 
   onOpenSettings,
   onOpenProfile,
@@ -107,6 +109,19 @@ export function DashboardHeaderDB({
           >
             <Sparkles className="w-4 h-4 text-violet-600 dark:text-violet-400" />
           </Button>
+          {onOpenNotion && (
+            <Button
+              onClick={onOpenNotion}
+              size="icon"
+              variant="outline"
+              className="border-dashed"
+              title="Integración y sincronización con Notion"
+            >
+              <div className="w-3.5 h-3.5 rounded bg-foreground text-background flex items-center justify-center font-bold text-[8px] leading-none shrink-0">
+                N
+              </div>
+            </Button>
+          )}
           <Button onClick={onNewTask} size="default" className="gap-2 shadow-sm flex-1 sm:flex-none">
             <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
             <span className="sm:inline">Nueva tarea</span>

@@ -55,6 +55,7 @@ interface AppSidebarProps {
   onOpenAI: () => void;
   onSignOut: () => void;
   onOpenClients: (project: Project) => void;
+  onOpenNotion?: () => void;
   isAdmin: boolean;
 }
 
@@ -77,6 +78,7 @@ export function AppSidebar({
   onOpenAI,
   onSignOut,
   onOpenClients,
+  onOpenNotion,
   isAdmin,
 }: AppSidebarProps) {
   const { state, toggleSidebar } = useSidebar();
@@ -183,8 +185,21 @@ export function AppSidebar({
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton onClick={onOpenAI} tooltip="Asistente IA">
-                  <Sparkles className="w-4 h-4" />
+                  <Sparkles className="w-4 h-4 text-purple-500" />
                   {!isCollapsed && <span>Asistente IA</span>}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton onClick={onOpenNotion} tooltip="Integración Notion">
+                  <div className="w-4 h-4 rounded bg-foreground text-background flex items-center justify-center font-bold text-[10px] leading-none shrink-0">
+                    N
+                  </div>
+                  {!isCollapsed && (
+                    <div className="flex items-center justify-between w-full">
+                      <span>Notion CRM</span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse ml-2" />
+                    </div>
+                  )}
                 </SidebarMenuButton>
               </SidebarMenuItem>
               {isAdmin && (
