@@ -149,13 +149,36 @@ async function syncNotionLogic({ startDate = "2026-08-01", cleanBefore = true } 
     if (cleanedOldTasksCount > 0) {
         console.log(`[NotionSync] Cleaned ${cleanedOldTasksCount} obsolete Notion tasks older than ${startDate}`);
     }
+    // Fetch existing content_items to update or deduplicate
+    const contentSnap = await db.collection("content_items").get();
+    const existingContentMap = new Map();
+    let cleanedOldContentCount = 0;
+    for (const doc of contentSnap.docs) {
+        const data = doc.data();
+        if (data.notion_page_id) {
+            if (cleanBefore && data.scheduled_date && data.scheduled_date < startDate) {
+                await doc.ref.delete();
+                cleanedOldContentCount++;
+                continue;
+            }
+            existingContentMap.set(data.notion_page_id, doc.ref);
+        }
+    }
+    if (cleanedOldContentCount > 0) {
+        console.log(`[NotionSync] Cleaned ${cleanedOldContentCount} obsolete content items older than ${startDate}`);
+    }
     let overdueTasksCreated = 0;
     let quotaAlertsCreated = 0;
+    let contentItemsCreated = 0;
+    let contentItemsUpdated = 0;
     const syncResultsPerDb = [];
     // Helper to match a client name or database title to a CRM client
     const findMatchingClient = (name, dbId) => {
         const norm = normalizeName(name);
         return crmClients.find(c => (c.notion_database_id && c.notion_database_id.replace(/-/g, "") === dbId.replace(/-/g, "")) ||
+            (c.brand_name && normalizeName(c.brand_name) === norm) ||
+            (c.brand_name && norm.includes(normalizeName(c.brand_name))) ||
+            (c.brand_name && normalizeName(c.brand_name).includes(norm)) ||
             (c.name && normalizeName(c.name) === norm) ||
             (c.name && norm.includes(normalizeName(c.name))) ||
             (c.name && normalizeName(c.name).includes(norm)));
@@ -240,6 +263,92 @@ async function syncNotionLogic({ startDate = "2026-08-01", cleanBefore = true } 
                     console.log(`[NotionSync] Created overdue task for: "${title}" (${clientName})`);
                 }
             }
+            // Sync into content_items collection for Client Calendar & List
+            if (postDate && postDate >= startDate) {
+                // Status mapping
+                const rawStatus = (props.Estado?.status?.name || props.Status?.status?.name || "").toLowerCase();
+                let contentStatus = "pending_review";
+                if (rawStatus.includes("posteado") || rawStatus.includes("publicado")) {
+                    contentStatus = "published";
+                }
+                else if (rawStatus.includes("aprobado") || rawStatus.includes("aprobada")) {
+                    contentStatus = "approved";
+                }
+                else if (rawStatus.includes("revis") || rawStatus.includes("aprobaci") || rawStatus.includes("necesita aprobación")) {
+                    contentStatus = "in_review";
+                }
+                else if (rawStatus.includes("cambio") || rawStatus.includes("correcci")) {
+                    contentStatus = "requires_changes";
+                }
+                else if (rawStatus.includes("programado")) {
+                    contentStatus = "scheduled";
+                }
+                else if (rawStatus.includes("borrador") || rawStatus.includes("redacci") || rawStatus.includes("diseño") || rawStatus.includes("idea")) {
+                    contentStatus = "draft";
+                }
+                // Platform mapping
+                const platformList = (props.Plataforma?.multi_select || []).map((p) => p.name?.toLowerCase() || "");
+                let platform = "instagram";
+                if (platformList.some((p) => p.includes("instagram")))
+                    platform = "instagram";
+                else if (platformList.some((p) => p.includes("facebook")))
+                    platform = "facebook";
+                else if (platformList.some((p) => p.includes("tiktok")))
+                    platform = "tiktok";
+                else if (platformList.some((p) => p.includes("linkedin")))
+                    platform = "linkedin";
+                else if (platformList.some((p) => p.includes("youtube")))
+                    platform = "youtube";
+                else if (platformList.some((p) => p.includes("twitter") || p.includes("x")))
+                    platform = "twitter";
+                // Content type mapping
+                const typeList = (props["Tipo de contenido"]?.multi_select || []).map((t) => t.name?.toLowerCase() || "");
+                let contentType = "post";
+                if (typeList.some((t) => t.includes("reel")) || title.toLowerCase().includes("reel"))
+                    contentType = "reel";
+                else if (typeList.some((t) => t.includes("historia") || t.includes("story")))
+                    contentType = "story";
+                else if (typeList.some((t) => t.includes("carrusel") || t.includes("carousel")))
+                    contentType = "carousel";
+                else if (typeList.some((t) => t.includes("video")))
+                    contentType = "video";
+                // Copy and files
+                const copyText = props["Copy/Caption"]?.rich_text?.map((t) => t.plain_text || "").join("") || null;
+                const artesFiles = (props["Artes Finales"]?.files || []).map((f) => f.file?.url || f.external?.url).filter(Boolean);
+                const refFiles = (props["Referencia 2"]?.files || []).map((f) => f.file?.url || f.external?.url).filter(Boolean);
+                const allFiles = [...artesFiles, ...refFiles];
+                const contentItemData = {
+                    client_id: matchedClient?.id || null,
+                    project_id: matchedClient?.project_id || "StpF5t3hgy2JsOyvSwT4",
+                    title,
+                    content_type: contentType,
+                    platform,
+                    status: contentStatus,
+                    scheduled_date: postDate,
+                    published_date: contentStatus === "published" ? postDate : null,
+                    copy: copyText,
+                    link: page.url || null,
+                    thumbnail_url: artesFiles[0] || null,
+                    file_urls: allFiles,
+                    notion_page_id: page.id,
+                    notion_database_id: dbItem.id,
+                    created_by: "notion_sync",
+                    updated_at: new Date().toISOString()
+                };
+                const existingDocRef = existingContentMap.get(page.id);
+                if (existingDocRef) {
+                    await existingDocRef.update(contentItemData);
+                    contentItemsUpdated++;
+                }
+                else {
+                    const newDoc = await db.collection("content_items").add({
+                        ...contentItemData,
+                        created_at: new Date().toISOString()
+                    });
+                    existingContentMap.set(page.id, newDoc);
+                    contentItemsCreated++;
+                }
+            }
         }
         // Check Monthly Quota for this client/database
         let createdQuotaAlert = false;
@@ -319,12 +428,16 @@ async function syncNotionLogic({ startDate = "2026-08-01", cleanBefore = true } 
             console.error("[NotionSync] Error sending push notifications:", pushErr);
         }
     }
-    console.log(`[NotionSync] Sync completed: ${overdueTasksCreated} overdue created, ${quotaAlertsCreated} quota alerts created, ${cleanedOldTasksCount} old tasks cleaned.`);
+    console.log(`[NotionSync] Sync completed: ${overdueTasksCreated} overdue created, ${quotaAlertsCreated} quota alerts created, ${cleanedOldTasksCount} old tasks cleaned, ${contentItemsCreated} contents created, ${contentItemsUpdated} contents updated.`);
     return {
         success: true,
         timestamp: new Date().toISOString(),
         startDate,
         cleanedOldTasksCount,
+        cleanedOldContentCount,
+        contentItemsCreated,
+        contentItemsUpdated,
+        totalContentItems: existingContentMap.size,
         checkedDatabasesCount: databases.length,
         overdueTasksCreated,
         quotaAlertsCreated,

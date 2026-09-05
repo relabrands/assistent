@@ -200,20 +200,31 @@ export function ContentModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-3xl h-[90vh] sm:h-auto sm:max-h-[85vh] p-0 flex flex-col gap-0">
         <DialogHeader className="p-4 sm:p-6 pb-2 sm:pb-4 shrink-0 border-b">
-          <DialogTitle className="text-base sm:text-lg font-semibold flex flex-wrap items-center gap-2">
-            <span className="flex items-center gap-1">
-              {CONTENT_TYPE_ICONS[contentType]} 
-              {content ? (isClientView ? 'Detalle del contenido' : 'Editar contenido') : 'Nuevo contenido'}
-            </span>
-            {content && (
-              <Badge className={cn(
-                CONTENT_STATUS_COLORS[content.status].bg,
-                CONTENT_STATUS_COLORS[content.status].text
-              )}>
-                {CONTENT_STATUS_LABELS[content.status]}
-              </Badge>
+          <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+            <DialogTitle className="text-base sm:text-lg font-semibold flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-1">
+                {CONTENT_TYPE_ICONS[contentType]} 
+                {content ? (isClientView ? 'Detalle del contenido' : 'Editar contenido') : 'Nuevo contenido'}
+              </span>
+              {content && (
+                <Badge className={cn(
+                  CONTENT_STATUS_COLORS[content.status].bg,
+                  CONTENT_STATUS_COLORS[content.status].text
+                )}>
+                  {CONTENT_STATUS_LABELS[content.status]}
+                </Badge>
+              )}
+            </DialogTitle>
+            {content?.link && (
+              <Button variant="outline" size="sm" asChild className="h-7 text-xs gap-1.5 font-medium">
+                <a href={content.link} target="_blank" rel="noopener noreferrer">
+                  <span className="font-bold text-[11px] px-1 bg-black text-white dark:bg-white dark:text-black rounded">N</span>
+                  Abrir en Notion
+                  <ExternalLink className="w-3 h-3 text-muted-foreground" />
+                </a>
+              </Button>
             )}
-          </DialogTitle>
+          </div>
         </DialogHeader>
         
         <div className="flex-1 overflow-y-auto px-4 sm:px-6">

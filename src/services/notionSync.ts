@@ -1,4 +1,4 @@
-import { collection, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, deleteDoc, updateDoc, doc } from 'firebase/firestore';
 import { db } from '@/integrations/firebase/client';
 import { Client } from '@/types/content';
 import { Workspace, Profile } from '@/types/database';
@@ -126,6 +126,9 @@ export async function runNotionSync({
   overdueCreated: number;
   quotaAlertsCreated: number;
   cleanedOldTasksCount?: number;
+  contentItemsCreated?: number;
+  contentItemsUpdated?: number;
+  totalContentItems?: number;
   startDate?: string;
   databases: NotionDbSyncStatus[];
   error?: string;
@@ -162,6 +165,9 @@ export async function runNotionSync({
             overdueCreated: cloudData.overdueTasksCreated || 0,
             quotaAlertsCreated: cloudData.quotaAlertsCreated || 0,
             cleanedOldTasksCount: cloudData.cleanedOldTasksCount || 0,
+            contentItemsCreated: cloudData.contentItemsCreated || 0,
+            contentItemsUpdated: cloudData.contentItemsUpdated || 0,
+            totalContentItems: cloudData.totalContentItems || 0,
             startDate: cloudData.startDate || startDate,
             databases: (cloudData.databases || []).map((d: any) => ({
               id: d.database_id,
@@ -206,13 +212,32 @@ export async function runNotionSync({
 
     let overdueCreated = 0;
     let quotaAlertsCreated = 0;
+    let contentItemsCreated = 0;
+    let contentItemsUpdated = 0;
     const dbStatuses: NotionDbSyncStatus[] = [];
 
-    // Match client helper
+    // Fetch existing content_items in client fallback
+    const contentSnapshot = await getDocs(collection(db, 'content_items'));
+    const existingContentMap = new Map<string, string>();
+    for (const docSnap of contentSnapshot.docs) {
+      const data = docSnap.data();
+      if (data.notion_page_id) {
+        if (cleanBefore && data.scheduled_date && data.scheduled_date < startDate) {
+          await deleteDoc(docSnap.ref);
+          continue;
+        }
+        existingContentMap.set(data.notion_page_id, docSnap.id);
+      }
+    }
+
+    // Match client helper (checking brand_name, name, and database ID)
     const findMatchingClient = (title: string, dbId: string): Client | undefined => {
       const norm = normalizeName(title);
       return clients.find((c) =>
         (c.notion_database_id && c.notion_database_id.replace(/-/g, '') === dbId.replace(/-/g, '')) ||
+        (c.brand_name && normalizeName(c.brand_name) === norm) ||
+        (c.brand_name && norm.includes(normalizeName(c.brand_name))) ||
+        (c.brand_name && normalizeName(c.brand_name).includes(norm)) ||
         (c.name && normalizeName(c.name) === norm) ||
         (c.name && norm.includes(normalizeName(c.name))) ||
         (c.name && normalizeName(c.name).includes(norm))
@@ -293,6 +318,78 @@ export async function runNotionSync({
             overdueCreated++;
           }
         }
+
+        // Sync into content_items for Client Calendar & List
+        if (postDate && postDate >= startDate) {
+          const rawStatus = statusName.toLowerCase();
+          let contentStatus: any = 'pending_review';
+          if (rawStatus.includes('posteado') || rawStatus.includes('publicado')) {
+            contentStatus = 'published';
+          } else if (rawStatus.includes('aprobado') || rawStatus.includes('aprobada')) {
+            contentStatus = 'approved';
+          } else if (rawStatus.includes('revis') || rawStatus.includes('aprobaci') || rawStatus.includes('necesita aprobación')) {
+            contentStatus = 'in_review';
+          } else if (rawStatus.includes('cambio') || rawStatus.includes('correcci')) {
+            contentStatus = 'requires_changes';
+          } else if (rawStatus.includes('programado')) {
+            contentStatus = 'scheduled';
+          } else if (rawStatus.includes('borrador') || rawStatus.includes('redacci') || rawStatus.includes('diseño') || rawStatus.includes('idea')) {
+            contentStatus = 'draft';
+          }
+
+          const platformList = (props['Plataforma']?.multi_select || []).map((p: any) => p.name?.toLowerCase() || '');
+          let platform: any = 'instagram';
+          if (platformList.some((p: string) => p.includes('instagram'))) platform = 'instagram';
+          else if (platformList.some((p: string) => p.includes('facebook'))) platform = 'facebook';
+          else if (platformList.some((p: string) => p.includes('tiktok'))) platform = 'tiktok';
+          else if (platformList.some((p: string) => p.includes('linkedin'))) platform = 'linkedin';
+          else if (platformList.some((p: string) => p.includes('youtube'))) platform = 'youtube';
+          else if (platformList.some((p: string) => p.includes('twitter') || p.includes('x'))) platform = 'twitter';
+
+          const typeList = (props['Tipo de contenido']?.multi_select || []).map((t: any) => t.name?.toLowerCase() || '');
+          let contentType: any = 'post';
+          if (typeList.some((t: string) => t.includes('reel')) || title.toLowerCase().includes('reel')) contentType = 'reel';
+          else if (typeList.some((t: string) => t.includes('historia') || t.includes('story'))) contentType = 'story';
+          else if (typeList.some((t: string) => t.includes('carrusel') || t.includes('carousel'))) contentType = 'carousel';
+          else if (typeList.some((t: string) => t.includes('video'))) contentType = 'video';
+
+          const copyText = props['Copy/Caption']?.rich_text?.map((t: any) => t.plain_text || '').join('') || null;
+          const artesFiles = (props['Artes Finales']?.files || []).map((f: any) => f.file?.url || f.external?.url).filter(Boolean);
+          const refFiles = (props['Referencia 2']?.files || []).map((f: any) => f.file?.url || f.external?.url).filter(Boolean);
+          const allFiles = [...artesFiles, ...refFiles];
+
+          const contentItemData = {
+            client_id: matchedClient?.id || null,
+            project_id: matchedClient?.project_id || 'StpF5t3hgy2JsOyvSwT4',
+            title,
+            content_type: contentType,
+            platform,
+            status: contentStatus,
+            scheduled_date: postDate,
+            published_date: contentStatus === 'published' ? postDate : null,
+            copy: copyText,
+            link: page.url || null,
+            thumbnail_url: artesFiles[0] || null,
+            file_urls: allFiles,
+            notion_page_id: page.id,
+            notion_database_id: dbItem.id,
+            created_by: profile?.id || 'notion_sync',
+            updated_at: new Date().toISOString(),
+          };
+
+          const existingDocId = existingContentMap.get(page.id);
+          if (existingDocId) {
+            await updateDoc(doc(db, 'content_items', existingDocId), contentItemData);
+            contentItemsUpdated++;
+          } else {
+            const newDoc = await addDoc(collection(db, 'content_items'), {
+              ...contentItemData,
+              created_at: new Date().toISOString(),
+            });
+            existingContentMap.set(page.id, newDoc.id);
+            contentItemsCreated++;
+          }
+        }
       }
 
       // Quota check
@@ -352,6 +449,9 @@ export async function runNotionSync({
       overdueCreated,
       quotaAlertsCreated,
       cleanedOldTasksCount,
+      contentItemsCreated,
+      contentItemsUpdated,
+      totalContentItems: existingContentMap.size,
       startDate,
       databases: dbStatuses,
     };

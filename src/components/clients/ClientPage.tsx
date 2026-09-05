@@ -1,10 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Client, ContentItem, CONTENT_STATUS_LABELS, CONTENT_STATUS_COLORS, PLATFORM_LABELS, PLATFORM_COLORS } from '@/types/content';
 import { Profile, Project } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { 
   ArrowLeft, 
   Calendar, 
@@ -17,13 +32,19 @@ import {
   Mail,
   Phone,
   ExternalLink,
-  UserPlus
+  UserPlus,
+  RefreshCw,
+  Database,
+  Link as LinkIcon,
+  Check
 } from 'lucide-react';
 import { ContentCalendar } from '../content/ContentCalendar';
 import { ContentList } from '../content/ContentList';
 import { ContentModal } from '../content/ContentModal';
 import { InviteClientModal } from './InviteClientModal';
 import { CustomFieldsManager } from '../content/CustomFieldsManager';
+import { runNotionSync, getConnectedNotionDatabases, KNOWN_NOTION_DATABASES } from '@/services/notionSync';
+import { toast } from 'sonner';
 
 interface ClientPageProps {
   client: Client;
@@ -37,6 +58,8 @@ interface ClientPageProps {
   onDeleteContent: (id: string) => Promise<boolean>;
   onApproveContent: (id: string) => Promise<boolean>;
   onRequestChanges: (id: string) => Promise<boolean>;
+  onUpdateClient?: (id: string, data: Partial<Client>) => Promise<boolean>;
+  clients?: Client[];
   isClientView?: boolean;
   isEmbedded?: boolean;
 }
@@ -53,6 +76,8 @@ export function ClientPage({
   onDeleteContent,
   onApproveContent,
   onRequestChanges,
+  onUpdateClient,
+  clients = [],
   isClientView = false,
   isEmbedded = false,
 }: ClientPageProps) {
@@ -60,6 +85,26 @@ export function ClientPage({
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [editingContent, setEditingContent] = useState<ContentItem | null>(null);
   const [selectedContent, setSelectedContent] = useState<ContentItem | null>(null);
+  const [isSyncingNotion, setIsSyncingNotion] = useState(false);
+  const [isLinkDbModalOpen, setIsLinkDbModalOpen] = useState(false);
+  const [availableDbs, setAvailableDbs] = useState<Array<{ id: string; title: string }>>(KNOWN_NOTION_DATABASES);
+  const [selectedDbIdToLink, setSelectedDbIdToLink] = useState<string>(client.notion_database_id || '');
+
+  // Load connected databases
+  useEffect(() => {
+    getConnectedNotionDatabases().then((dbs) => {
+      if (dbs && dbs.length > 0) {
+        setAvailableDbs(dbs);
+      }
+    });
+  }, []);
+
+  const linkedDb = availableDbs.find(d => 
+    (client.notion_database_id && client.notion_database_id.replace(/-/g, '') === d.id.replace(/-/g, '')) ||
+    (client.brand_name && d.title.toLowerCase().includes(client.brand_name.toLowerCase())) ||
+    (client.name && d.title.toLowerCase().includes(client.name.toLowerCase())) ||
+    (client.name && client.name.toLowerCase().includes(d.title.toLowerCase()))
+  );
 
   const clientContent = contentItems.filter(c => c.client_id === client.id);
 
@@ -93,6 +138,44 @@ export function ClientPage({
   const handleOpenNewContent = () => {
     setEditingContent(null);
     setIsContentModalOpen(true);
+  };
+
+  const handleSyncNotion = async () => {
+    setIsSyncingNotion(true);
+    toast.info(`Sincronizando contenidos de ${client.brand_name || client.name} desde Notion...`);
+    try {
+      const res = await runNotionSync({
+        clients: clients.length > 0 ? clients : [client],
+        currentWorkspace: null,
+        profile,
+        startDate: '2026-08-01',
+        cleanBefore: false,
+      });
+      if (res.success) {
+        toast.success('¡Sincronización completada! El calendario de contenidos se ha actualizado.');
+      } else {
+        toast.error(res.error || 'Error al sincronizar con Notion');
+      }
+    } catch (e: any) {
+      console.error('Error syncing notion in client page:', e);
+      toast.error('Error al sincronizar con Notion');
+    } finally {
+      setIsSyncingNotion(false);
+    }
+  };
+
+  const handleSaveLinkedDb = async () => {
+    if (!onUpdateClient || !selectedDbIdToLink) return;
+    const ok = await onUpdateClient(client.id, {
+      notion_database_id: selectedDbIdToLink,
+    });
+    if (ok) {
+      toast.success('Base de datos de Notion vinculada correctamente.');
+      setIsLinkDbModalOpen(false);
+      handleSyncNotion();
+    } else {
+      toast.error('Error al vincular base de datos.');
+    }
   };
 
   // Stats
@@ -173,10 +256,56 @@ export function ClientPage({
                 </Badge>
               )}
             </div>
+
+            {/* Notion Database Connection Status */}
+            <div className="flex items-center gap-2 pt-1">
+              {linkedDb ? (
+                <Badge variant="outline" className="gap-1.5 py-1 px-2.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 text-xs font-normal">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="font-semibold text-[10px] px-1 bg-black text-white dark:bg-white dark:text-black rounded mr-0.5">N</span>
+                  <span>Notion: <strong className="font-semibold">{linkedDb.title}</strong></span>
+                  {!isClientView && onUpdateClient && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDbIdToLink(linkedDb.id);
+                        setIsLinkDbModalOpen(true);
+                      }}
+                      className="ml-1 text-[11px] underline text-muted-foreground hover:text-foreground"
+                      title="Cambiar base de datos"
+                    >
+                      (cambiar)
+                    </button>
+                  )}
+                </Badge>
+              ) : (
+                <Badge
+                  variant="outline"
+                  onClick={() => !isClientView && onUpdateClient && setIsLinkDbModalOpen(true)}
+                  className={`gap-1.5 py-1 px-2.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 text-xs font-normal ${!isClientView && onUpdateClient ? 'cursor-pointer hover:bg-amber-500/20 transition-colors' : ''}`}
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>Sin base de datos de Notion vinculada</span>
+                  {!isClientView && onUpdateClient && (
+                    <span className="underline font-semibold ml-1">Vincular base de datos</span>
+                  )}
+                </Badge>
+              )}
+            </div>
           </div>
           
           {!isClientView && (
             <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={handleSyncNotion}
+                disabled={isSyncingNotion}
+                className="gap-1.5 border-primary/20 hover:bg-primary/5 shadow-sm font-medium"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingNotion ? 'animate-spin text-primary' : 'text-muted-foreground'}`} />
+                <span className="font-bold text-xs px-1 bg-black text-white dark:bg-white dark:text-black rounded">N</span>
+                <span>{isSyncingNotion ? 'Sincronizando...' : 'Sincronizar Notion'}</span>
+              </Button>
               <CustomFieldsManager projectId={project.id} />
               <Button variant="outline" onClick={() => setIsInviteModalOpen(true)}>
                 <UserPlus className="w-4 h-4 mr-1" />
@@ -278,6 +407,73 @@ export function ClientPage({
         client={client}
         profile={profile}
       />
+
+      {/* Link Notion Database Dialog */}
+      <Dialog open={isLinkDbModalOpen} onOpenChange={setIsLinkDbModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <span className="font-bold text-xs px-1.5 py-0.5 bg-black text-white dark:bg-white dark:text-black rounded">N</span>
+              Vincular Base de Datos de Notion
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Selecciona la base de datos de Notion correspondiente a <strong>{client.brand_name || client.name}</strong> para sincronizar automáticamente sus contenidos en el calendario.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-foreground">
+                Base de Datos Conectada en Notion:
+              </label>
+              <Select
+                value={selectedDbIdToLink}
+                onValueChange={setSelectedDbIdToLink}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Seleccionar base de datos..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableDbs.map((db) => (
+                    <SelectItem key={db.id} value={db.id}>
+                      {db.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="p-3 bg-muted/60 rounded-lg text-xs text-muted-foreground space-y-1 border border-border/50">
+              <p className="font-medium text-foreground flex items-center gap-1">
+                <Database className="w-3.5 h-3.5 text-primary" />
+                Sincronización Automática
+              </p>
+              <p>
+                Al guardar, se importarán todas las publicaciones desde el 1 de agosto con sus fechas, estados, copys, artes y enlaces directos a Notion.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsLinkDbModalOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSaveLinkedDb}
+              disabled={!selectedDbIdToLink}
+              className="gap-1.5"
+            >
+              <Check className="w-4 h-4" />
+              Vincular y Sincronizar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

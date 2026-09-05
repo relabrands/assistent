@@ -34,9 +34,10 @@ export function ContentCalendar({
   const days = eachDayOfInterval({ start: calendarStart, end: calendarEnd });
 
   const getContentForDay = (date: Date) => {
+    const dayStr = format(date, 'yyyy-MM-dd');
     return contentItems.filter(item => {
       if (!item.scheduled_date) return false;
-      return isSameDay(new Date(item.scheduled_date), date);
+      return item.scheduled_date.slice(0, 10) === dayStr;
     });
   };
 

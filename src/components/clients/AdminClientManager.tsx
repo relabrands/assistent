@@ -91,6 +91,8 @@ export function AdminClientManager({
               onAddContent={onAddContent}
               onUpdateContent={onUpdateContent}
               onDeleteContent={onDeleteContent}
+              onUpdateClient={onUpdateClient}
+              clients={clients}
               onApproveContent={async (id) => {
                 return await onUpdateContent(id, {
                   status: 'approved',
