@@ -44,18 +44,25 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
 
     setLoading(true);
 
-    let tasksQuery;
-    if (currentWorkspace?.id) {
-      tasksQuery = query(
-        collection(db, 'tasks'),
-        where('workspace_id', '==', currentWorkspace.id)
-      );
-    } else {
-      tasksQuery = query(collection(db, 'tasks'));
-    }
+    // Query tasks collection and filter in memory so tasks with null/missing workspace_id (e.g. from Notion sync) are not hidden
+    const tasksQuery = query(collection(db, 'tasks'));
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Task));
+      let items = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Task));
+
+      // Filter by workspace: show tasks belonging to current workspace OR tasks without a specific workspace (global/shared/notion)
+      if (currentWorkspace?.id) {
+        items = items.filter(t => !t.workspace_id || t.workspace_id === currentWorkspace.id);
+      }
+
+      // Normalize any legacy or imported status 'todo' to 'inbox'
+      items = items.map(t => {
+        if ((t.status as any) === 'todo') {
+          return { ...t, status: 'inbox' as TaskStatus };
+        }
+        return t;
+      });
+
       // Sort in memory by position and created_at
       items.sort((a, b) => {
         if ((a.position ?? 0) !== (b.position ?? 0)) {
