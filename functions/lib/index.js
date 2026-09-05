@@ -66,7 +66,7 @@ function normalizeName(str) {
 /**
  * Core Notion synchronization logic
  */
-async function syncNotionLogic() {
+async function syncNotionLogic({ startDate = "2026-08-01", cleanBefore = true } = {}) {
     const now = new Date();
     // Get date in YYYY-MM-DD
     const todayStr = now.toISOString().split("T")[0];
@@ -76,7 +76,7 @@ async function syncNotionLogic() {
         "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
     ];
     const currentMonthLabel = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
-    console.log(`[NotionSync] Starting sync on ${todayStr} for month ${currentMonthStr}...`);
+    console.log(`[NotionSync] Starting sync from ${startDate} on ${todayStr} for month ${currentMonthStr}...`);
     // 1. Fetch connected databases from Notion (with fallback to known list)
     let databases = [];
     try {
@@ -131,14 +131,24 @@ async function syncNotionLogic() {
     const workspacesSnap = await db.collection("workspaces").limit(1).get();
     const defaultWorkspaceId = !workspacesSnap.empty ? workspacesSnap.docs[0].id : null;
     // Fetch all existing tasks to build a Set of already handled notion_page_ids
+    // If cleanBefore is enabled, remove tasks from before startDate (keeping quota alerts)
     const tasksSnap = await db.collection("tasks").get();
     const existingNotionIds = new Set();
-    tasksSnap.forEach(doc => {
+    let cleanedOldTasksCount = 0;
+    for (const doc of tasksSnap.docs) {
         const t = doc.data();
         if (t.notion_page_id) {
+            if (cleanBefore && t.due_date && t.due_date < startDate && !t.notion_page_id.startsWith("quota_")) {
+                await doc.ref.delete();
+                cleanedOldTasksCount++;
+                continue;
+            }
             existingNotionIds.add(t.notion_page_id);
         }
-    });
+    }
+    if (cleanedOldTasksCount > 0) {
+        console.log(`[NotionSync] Cleaned ${cleanedOldTasksCount} obsolete Notion tasks older than ${startDate}`);
+    }
     let overdueTasksCreated = 0;
     let quotaAlertsCreated = 0;
     const syncResultsPerDb = [];
@@ -196,8 +206,8 @@ async function syncNotionLogic() {
             if (postDate && postDate.startsWith(currentMonthStr)) {
                 dbMonthPostsCount++;
             }
-            // Check Overdue: scheduled date <= today AND not posted
-            if (postDate && postDate <= todayStr && !isPosted) {
+            // Check Overdue: scheduled date >= startDate AND scheduled date <= today AND not posted
+            if (postDate && postDate >= startDate && postDate <= todayStr && !isPosted) {
                 dbOverdueCount++;
                 // Deduplication check
                 if (!existingNotionIds.has(page.id)) {
@@ -309,10 +319,12 @@ async function syncNotionLogic() {
             console.error("[NotionSync] Error sending push notifications:", pushErr);
         }
     }
-    console.log(`[NotionSync] Sync completed: ${overdueTasksCreated} overdue created, ${quotaAlertsCreated} quota alerts created.`);
+    console.log(`[NotionSync] Sync completed: ${overdueTasksCreated} overdue created, ${quotaAlertsCreated} quota alerts created, ${cleanedOldTasksCount} old tasks cleaned.`);
     return {
         success: true,
         timestamp: new Date().toISOString(),
+        startDate,
+        cleanedOldTasksCount,
         checkedDatabasesCount: databases.length,
         overdueTasksCreated,
         quotaAlertsCreated,
@@ -324,7 +336,12 @@ async function syncNotionLogic() {
  */
 exports.syncNotion = (0, https_1.onRequest)({ cors: true }, async (req, res) => {
     try {
-        const result = await syncNotionLogic();
+        const startDate = (req.body?.startDate || req.query?.startDate || "2026-08-01");
+        const cleanBefore = req.body?.cleanBefore !== undefined
+            ? Boolean(req.body?.cleanBefore)
+            : (req.query?.cleanBefore !== undefined ? req.query?.cleanBefore === "true" : true);
+        console.log(`[syncNotion HTTP] Request received with startDate=${startDate}, cleanBefore=${cleanBefore}`);
+        const result = await syncNotionLogic({ startDate, cleanBefore });
         res.status(200).json(result);
     }
     catch (error) {

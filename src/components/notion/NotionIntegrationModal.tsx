@@ -57,10 +57,14 @@ export function NotionIntegrationModal({
   const [isSyncing, setIsSyncing] = useState(false);
   const [progress, setProgress] = useState<NotionSyncProgress | null>(null);
   const [dbStatuses, setDbStatuses] = useState<NotionDbSyncStatus[]>([]);
+  const [startDate, setStartDate] = useState<string>('2026-08-01');
+  const [cleanBefore, setCleanBefore] = useState<boolean>(true);
   const [lastSyncResult, setLastSyncResult] = useState<{
     time: string;
     overdueCreated: number;
     quotaAlertsCreated: number;
+    cleanedOldTasksCount?: number;
+    startDate?: string;
   } | null>(null);
 
   const [connectedDbs, setConnectedDbs] = useState<Array<{ id: string; title: string }>>(KNOWN_NOTION_DATABASES);
@@ -99,6 +103,8 @@ export function NotionIntegrationModal({
         clients,
         currentWorkspace,
         profile,
+        startDate,
+        cleanBefore,
         defaultQuota: 8,
         onProgress: (p) => setProgress(p),
       });
@@ -109,12 +115,19 @@ export function NotionIntegrationModal({
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           overdueCreated: result.overdueCreated,
           quotaAlertsCreated: result.quotaAlertsCreated,
+          cleanedOldTasksCount: result.cleanedOldTasksCount,
+          startDate: result.startDate || startDate,
         });
 
-        if (result.overdueCreated > 0 || result.quotaAlertsCreated > 0) {
-          toast.success(
-            `Sincronización finalizada: ${result.overdueCreated} contenido(s) vencido(s) y ${result.quotaAlertsCreated} alerta(s) de cuota detectadas.`
-          );
+        const messages: string[] = [];
+        if (result.overdueCreated > 0) messages.push(`${result.overdueCreated} no publicado(s)`);
+        if (result.quotaAlertsCreated > 0) messages.push(`${result.quotaAlertsCreated} alerta(s) de cuota`);
+        if (result.cleanedOldTasksCount && result.cleanedOldTasksCount > 0) {
+          messages.push(`${result.cleanedOldTasksCount} tarea(s) antiguas depuradas`);
+        }
+
+        if (messages.length > 0) {
+          toast.success(`Sincronización finalizada: ${messages.join(', ')}.`);
         } else {
           toast.success('Sincronización completada. Todos los contenidos al día.');
         }
@@ -203,10 +216,10 @@ export function NotionIntegrationModal({
 
           {/* Last sync stats banner */}
           {lastSyncResult && !isSyncing && (
-            <div className="mt-3 flex items-center justify-between px-3 py-2 rounded-lg bg-muted/60 text-xs text-muted-foreground border border-border/50">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-muted/60 text-xs text-muted-foreground border border-border/50">
               <span className="flex items-center gap-1.5">
                 <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-                Última sincronización: <strong className="text-foreground">{lastSyncResult.time}</strong>
+                Última sincronización: <strong className="text-foreground">{lastSyncResult.time}</strong> (desde {lastSyncResult.startDate || startDate})
               </span>
               <div className="flex items-center gap-3">
                 <span className="text-amber-600 dark:text-amber-400 font-medium">
@@ -215,6 +228,11 @@ export function NotionIntegrationModal({
                 <span className="text-rose-600 dark:text-rose-400 font-medium">
                   {lastSyncResult.quotaAlertsCreated} alertas de cuota
                 </span>
+                {lastSyncResult.cleanedOldTasksCount !== undefined && lastSyncResult.cleanedOldTasksCount > 0 && (
+                  <span className="text-blue-600 dark:text-blue-400 font-medium">
+                    {lastSyncResult.cleanedOldTasksCount} antiguas depuradas
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -222,6 +240,60 @@ export function NotionIntegrationModal({
 
         {/* Scrollable Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Date Filter & Scope Configuration */}
+          <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0 mt-0.5">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-foreground">Filtro de Fecha para Búsqueda</p>
+                    <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+                      1 de Agosto 2026
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Especifica desde qué fecha se verificarán los contenidos en Notion. Los posts anteriores no generarán tareas atrasadas.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="h-8 w-36 text-xs bg-background font-medium"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setStartDate('2026-08-01')}
+                  className="h-8 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Restablecer
+                </Button>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-primary/10 flex items-center justify-between text-xs text-muted-foreground">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={cleanBefore}
+                  onChange={(e) => setCleanBefore(e.target.checked)}
+                  className="rounded border-input text-primary focus:ring-primary w-3.5 h-3.5"
+                />
+                <span>Limpiar automáticamente tareas atrasadas previas a esta fecha ({startDate})</span>
+              </label>
+              <span className="text-[11px] text-muted-foreground hidden sm:inline">
+                Ignora años y meses anteriores
+              </span>
+            </div>
+          </div>
+
           {/* Rules Overview Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="p-3.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-3">
@@ -231,7 +303,7 @@ export function NotionIntegrationModal({
               <div className="text-xs space-y-1">
                 <p className="font-medium text-foreground">Detección de Contenido Vencido</p>
                 <p className="text-muted-foreground leading-relaxed">
-                  Si un contenido en Notion tiene fecha programada para hoy o días pasados y no está marcado como <strong>"Posteado"</strong>, se genera automáticamente una tarea en riesgo en el CRM.
+                  Si un contenido en Notion tiene fecha programada entre <strong>{startDate}</strong> y hoy, y no está marcado como <strong>"Posteado"</strong>, se genera automáticamente una tarea en riesgo en el CRM.
                 </p>
               </div>
             </div>

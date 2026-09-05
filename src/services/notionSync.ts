@@ -1,4 +1,4 @@
-import { collection, getDocs, addDoc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '@/integrations/firebase/client';
 import { Client } from '@/types/content';
 import { Workspace, Profile } from '@/types/database';
@@ -109,18 +109,24 @@ export async function runNotionSync({
   clients,
   currentWorkspace,
   profile,
+  startDate = '2026-08-01',
+  cleanBefore = true,
   defaultQuota = 8,
   onProgress,
 }: {
   clients: Client[];
   currentWorkspace: Workspace | null;
   profile: Profile | null;
+  startDate?: string;
+  cleanBefore?: boolean;
   defaultQuota?: number;
   onProgress?: (progress: NotionSyncProgress) => void;
 }): Promise<{
   success: boolean;
   overdueCreated: number;
   quotaAlertsCreated: number;
+  cleanedOldTasksCount?: number;
+  startDate?: string;
   databases: NotionDbSyncStatus[];
   error?: string;
 }> {
@@ -136,9 +142,16 @@ export async function runNotionSync({
 
     // 1. Try syncing via Cloud Function first for maximum reliability and push notifications
     try {
-      onProgress?.({ step: 'Sincronizando con Cloud Function de Notion...', processed: 25, total: 100 });
+      onProgress?.({ step: `Sincronizando con Cloud Function (desde ${startDate})...`, processed: 25, total: 100 });
       const cloudRes = await fetch('https://us-central1-rela-assitent.cloudfunctions.net/syncNotion', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          startDate,
+          cleanBefore,
+        }),
       });
       if (cloudRes.ok) {
         const cloudData = await cloudRes.json();
@@ -148,6 +161,8 @@ export async function runNotionSync({
             success: true,
             overdueCreated: cloudData.overdueTasksCreated || 0,
             quotaAlertsCreated: cloudData.quotaAlertsCreated || 0,
+            cleanedOldTasksCount: cloudData.cleanedOldTasksCount || 0,
+            startDate: cloudData.startDate || startDate,
             databases: (cloudData.databases || []).map((d: any) => ({
               id: d.database_id,
               title: d.title,
@@ -171,16 +186,23 @@ export async function runNotionSync({
     const rawDatabases = await getConnectedNotionDatabases();
     const databases = rawDatabases.length > 0 ? rawDatabases : KNOWN_NOTION_DATABASES;
 
-    // 2. Fetch existing tasks from Firestore to avoid duplicate creation
+    // 2. Fetch existing tasks from Firestore to avoid duplicate creation and clean obsolete ones
     onProgress?.({ step: 'Verificando tareas existentes en el CRM...', processed: 10, total: 100 });
     const tasksSnapshot = await getDocs(collection(db, 'tasks'));
     const existingNotionIds = new Set<string>();
-    tasksSnapshot.forEach((doc) => {
-      const data = doc.data();
+    let cleanedOldTasksCount = 0;
+
+    for (const docSnap of tasksSnapshot.docs) {
+      const data = docSnap.data();
       if (data.notion_page_id) {
+        if (cleanBefore && data.due_date && data.due_date < startDate && !data.notion_page_id.startsWith('quota_')) {
+          await deleteDoc(docSnap.ref);
+          cleanedOldTasksCount++;
+          continue;
+        }
         existingNotionIds.add(data.notion_page_id);
       }
-    });
+    }
 
     let overdueCreated = 0;
     let quotaAlertsCreated = 0;
@@ -236,8 +258,8 @@ export async function runNotionSync({
           dbMonthPostsCount++;
         }
 
-        // Overdue check: scheduled date <= today AND not posted
-        if (postDate && postDate <= todayStr && !isPosted) {
+        // Overdue check: scheduled date >= startDate AND scheduled date <= today AND not posted
+        if (postDate && postDate >= startDate && postDate <= todayStr && !isPosted) {
           dbOverdueCount++;
 
           if (!existingNotionIds.has(page.id)) {
@@ -329,6 +351,8 @@ export async function runNotionSync({
       success: true,
       overdueCreated,
       quotaAlertsCreated,
+      cleanedOldTasksCount,
+      startDate,
       databases: dbStatuses,
     };
   } catch (error: any) {
