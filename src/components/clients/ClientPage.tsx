@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Client, ContentItem, CONTENT_STATUS_LABELS, CONTENT_STATUS_COLORS, PLATFORM_LABELS, PLATFORM_COLORS } from '@/types/content';
 import { Profile, Project } from '@/types/database';
 import { Button } from '@/components/ui/button';
@@ -88,7 +88,16 @@ export function ClientPage({
   const [isSyncingNotion, setIsSyncingNotion] = useState(false);
   const [isLinkDbModalOpen, setIsLinkDbModalOpen] = useState(false);
   const [availableDbs, setAvailableDbs] = useState<Array<{ id: string; title: string }>>(KNOWN_NOTION_DATABASES);
+  const [currentClientDbId, setCurrentClientDbId] = useState<string>(client.notion_database_id || '');
   const [selectedDbIdToLink, setSelectedDbIdToLink] = useState<string>(client.notion_database_id || '');
+
+  // Keep currentClientDbId in sync if client prop changes
+  useEffect(() => {
+    if (client.notion_database_id) {
+      setCurrentClientDbId(client.notion_database_id);
+      setSelectedDbIdToLink(client.notion_database_id);
+    }
+  }, [client.notion_database_id]);
 
   // Load connected databases
   useEffect(() => {
@@ -99,12 +108,42 @@ export function ClientPage({
     });
   }, []);
 
-  const linkedDb = availableDbs.find(d => 
-    (client.notion_database_id && client.notion_database_id.replace(/-/g, '') === d.id.replace(/-/g, '')) ||
-    (client.brand_name && d.title.toLowerCase().includes(client.brand_name.toLowerCase())) ||
-    (client.name && d.title.toLowerCase().includes(client.name.toLowerCase())) ||
-    (client.name && client.name.toLowerCase().includes(d.title.toLowerCase()))
-  );
+  const linkedDb = useMemo(() => {
+    const activeDbId = currentClientDbId || client.notion_database_id;
+    if (activeDbId) {
+      const cleanTarget = activeDbId.replace(/-/g, '').toLowerCase();
+      const match = availableDbs.find(d => d.id.replace(/-/g, '').toLowerCase() === cleanTarget);
+      if (match) return match;
+    }
+
+    const normalize = (s: string) =>
+      s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const tokenize = (s: string) =>
+      s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+
+    const normBrand = client.brand_name ? normalize(client.brand_name) : '';
+    const normName = client.name ? normalize(client.name) : '';
+    const brandTokens = client.brand_name ? tokenize(client.brand_name) : [];
+    const nameTokens = client.name ? tokenize(client.name) : [];
+
+    // 1. Exact match of brand_name or name
+    const exactMatch = availableDbs.find(d => {
+      const normTitle = normalize(d.title);
+      return (normBrand && normTitle === normBrand) || (normName && normTitle === normName);
+    });
+    if (exactMatch) return exactMatch;
+
+    // 2. Whole word / token matching (preventing "ontol" from matching inside "odontológico")
+    const tokenMatch = availableDbs.find(d => {
+      const titleTokens = tokenize(d.title);
+      if (brandTokens.length > 0 && brandTokens.every(t => titleTokens.includes(t))) return true;
+      if (nameTokens.length > 0 && nameTokens.every(t => titleTokens.includes(t))) return true;
+      return false;
+    });
+    if (tokenMatch) return tokenMatch;
+
+    return null;
+  }, [availableDbs, currentClientDbId, client.notion_database_id, client.brand_name, client.name]);
 
   const clientContent = contentItems.filter(c => c.client_id === client.id);
 
@@ -140,12 +179,21 @@ export function ClientPage({
     setIsContentModalOpen(true);
   };
 
-  const handleSyncNotion = async () => {
+  const handleSyncNotion = async (overrideDbId?: string) => {
     setIsSyncingNotion(true);
     toast.info(`Sincronizando contenidos de ${client.brand_name || client.name} desde Notion...`);
     try {
+      const activeDbId = overrideDbId || currentClientDbId || client.notion_database_id;
+      const effectiveClient = {
+        ...client,
+        notion_database_id: activeDbId || client.notion_database_id,
+      };
+      const updatedClients = clients.length > 0
+        ? clients.map(c => c.id === client.id ? effectiveClient : c)
+        : [effectiveClient];
+
       const res = await runNotionSync({
-        clients: clients.length > 0 ? clients : [client],
+        clients: updatedClients,
         currentWorkspace: null,
         profile,
         startDate: '2026-08-01',
@@ -166,13 +214,14 @@ export function ClientPage({
 
   const handleSaveLinkedDb = async () => {
     if (!onUpdateClient || !selectedDbIdToLink) return;
+    setCurrentClientDbId(selectedDbIdToLink);
     const ok = await onUpdateClient(client.id, {
       notion_database_id: selectedDbIdToLink,
     });
     if (ok) {
       toast.success('Base de datos de Notion vinculada correctamente.');
       setIsLinkDbModalOpen(false);
-      handleSyncNotion();
+      handleSyncNotion(selectedDbIdToLink);
     } else {
       toast.error('Error al vincular base de datos.');
     }
@@ -268,7 +317,7 @@ export function ClientPage({
                     <button
                       type="button"
                       onClick={() => {
-                        setSelectedDbIdToLink(linkedDb.id);
+                        setSelectedDbIdToLink(currentClientDbId || client.notion_database_id || linkedDb.id);
                         setIsLinkDbModalOpen(true);
                       }}
                       className="ml-1 text-[11px] underline text-muted-foreground hover:text-foreground"

@@ -171,17 +171,34 @@ export async function syncNotionLogic({
   }> = [];
 
   // Helper to match a client name or database title to a CRM client
-  const findMatchingClient = (name: string, dbId: string) => {
-    const norm = normalizeName(name);
-    return crmClients.find(c => 
-      (c.notion_database_id && c.notion_database_id.replace(/-/g, "") === dbId.replace(/-/g, "")) ||
-      (c.brand_name && normalizeName(c.brand_name) === norm) ||
-      (c.brand_name && norm.includes(normalizeName(c.brand_name))) ||
-      (c.brand_name && normalizeName(c.brand_name).includes(norm)) ||
-      (c.name && normalizeName(c.name) === norm) ||
-      (c.name && norm.includes(normalizeName(c.name))) ||
-      (c.name && normalizeName(c.name).includes(norm))
+  const tokenize = (s: string) =>
+    s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+
+  const findMatchingClient = (title: string, dbId: string) => {
+    // 1. Exact notion_database_id match has absolute priority
+    const idMatch = crmClients.find(c =>
+      c.notion_database_id && c.notion_database_id.replace(/-/g, "").toLowerCase() === dbId.replace(/-/g, "").toLowerCase()
     );
+    if (idMatch) return idMatch;
+
+    const normTitle = normalizeName(title);
+    const titleTokens = tokenize(title);
+
+    // 2. Exact brand_name or name match
+    const exactMatch = crmClients.find(c =>
+      (c.brand_name && normalizeName(c.brand_name) === normTitle) ||
+      (c.name && normalizeName(c.name) === normTitle)
+    );
+    if (exactMatch) return exactMatch;
+
+    // 3. Whole token matching (preventing "ontol" from matching inside "odontológico")
+    return crmClients.find(c => {
+      const brandTokens = c.brand_name ? tokenize(c.brand_name) : [];
+      const nameTokens = c.name ? tokenize(c.name) : [];
+      if (brandTokens.length > 0 && brandTokens.every(t => titleTokens.includes(t))) return true;
+      if (nameTokens.length > 0 && nameTokens.every(t => titleTokens.includes(t))) return true;
+      return false;
+    });
   };
 
   // 3. Process each database

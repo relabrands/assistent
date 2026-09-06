@@ -39,16 +39,31 @@ export function AdminClientManager({
   onDeleteContent,
   onBack,
 }: AdminClientManagerProps) {
-  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [selectedClientFallback, setSelectedClientFallback] = useState<Client | null>(null);
   const [activeTab, setActiveTab] = useState<'content' | 'access'>('content');
 
+  const selectedClient = selectedClientId
+    ? (clients.find(c => c.id === selectedClientId) || selectedClientFallback)
+    : null;
+
   const handleSelectClient = (client: Client) => {
-    setSelectedClient(client);
+    setSelectedClientId(client.id);
+    setSelectedClientFallback(client);
     setActiveTab('content');
   };
 
   const handleBackToList = () => {
-    setSelectedClient(null);
+    setSelectedClientId(null);
+    setSelectedClientFallback(null);
+  };
+
+  const handleUpdateClientWrapper = async (id: string, data: Partial<Client>) => {
+    const ok = await onUpdateClient(id, data);
+    if (ok) {
+      setSelectedClientFallback(prev => prev && prev.id === id ? { ...prev, ...data } : prev);
+    }
+    return ok;
   };
 
   // If viewing a selected client
@@ -91,7 +106,7 @@ export function AdminClientManager({
               onAddContent={onAddContent}
               onUpdateContent={onUpdateContent}
               onDeleteContent={onDeleteContent}
-              onUpdateClient={onUpdateClient}
+              onUpdateClient={handleUpdateClientWrapper}
               clients={clients}
               onApproveContent={async (id) => {
                 return await onUpdateContent(id, {

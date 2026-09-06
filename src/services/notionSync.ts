@@ -146,7 +146,7 @@ export async function runNotionSync({
     // 1. Try syncing via Cloud Function first for maximum reliability and push notifications
     try {
       onProgress?.({ step: `Sincronizando con Cloud Function (desde ${startDate})...`, processed: 25, total: 100 });
-      const cloudRes = await fetch('https://us-central1-rela-assitent.cloudfunctions.net/syncNotion', {
+      const cloudRes = await fetch('https://syncnotion-3oikejrd2a-uc.a.run.app/syncNotion', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -230,18 +230,33 @@ export async function runNotionSync({
       }
     }
 
-    // Match client helper (checking brand_name, name, and database ID)
+    // Match client helper (checking database ID, exact brand/name, and word tokens)
+    const tokenize = (s: string) =>
+      s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+
     const findMatchingClient = (title: string, dbId: string): Client | undefined => {
-      const norm = normalizeName(title);
-      return clients.find((c) =>
-        (c.notion_database_id && c.notion_database_id.replace(/-/g, '') === dbId.replace(/-/g, '')) ||
-        (c.brand_name && normalizeName(c.brand_name) === norm) ||
-        (c.brand_name && norm.includes(normalizeName(c.brand_name))) ||
-        (c.brand_name && normalizeName(c.brand_name).includes(norm)) ||
-        (c.name && normalizeName(c.name) === norm) ||
-        (c.name && norm.includes(normalizeName(c.name))) ||
-        (c.name && normalizeName(c.name).includes(norm))
+      // 1. Exact notion_database_id match has absolute priority
+      const idMatch = clients.find(c => c.notion_database_id && c.notion_database_id.replace(/-/g, '').toLowerCase() === dbId.replace(/-/g, '').toLowerCase());
+      if (idMatch) return idMatch;
+
+      const normTitle = normalizeName(title);
+      const titleTokens = tokenize(title);
+
+      // 2. Exact match of brand_name or name
+      const exactMatch = clients.find(c =>
+        (c.brand_name && normalizeName(c.brand_name) === normTitle) ||
+        (c.name && normalizeName(c.name) === normTitle)
       );
+      if (exactMatch) return exactMatch;
+
+      // 3. Whole token matching (e.g. CEGIMED in "CEGIMED - Dr. Yilfredy", never matching inside words)
+      return clients.find(c => {
+        const brandTokens = c.brand_name ? tokenize(c.brand_name) : [];
+        const nameTokens = c.name ? tokenize(c.name) : [];
+        if (brandTokens.length > 0 && brandTokens.every(t => titleTokens.includes(t))) return true;
+        if (nameTokens.length > 0 && nameTokens.every(t => titleTokens.includes(t))) return true;
+        return false;
+      });
     };
 
     // 3. Process each database
