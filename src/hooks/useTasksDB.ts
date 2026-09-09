@@ -14,7 +14,7 @@ import {
 import { db } from '@/integrations/firebase/client';
 import { Task, TaskStatus, Profile, TaskPriority, LifeArea, Workspace, RecurrenceType, Subtask } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
-import { addDays, addWeeks, addMonths } from 'date-fns';
+import { addDays, addWeeks, addMonths, isThisWeek, isPast, isToday, parseISO } from 'date-fns';
 
 export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace | null = null) {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -63,6 +63,42 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
         return t;
       });
 
+      // Smart Auto-promotion: automatically sync status according to due date
+      const tasksToAutoPromote = items.filter(t => {
+        if (t.status === 'completed' || t.notion_page_id || !t.due_date) return false;
+        try {
+          const d = parseISO(t.due_date);
+          if (isNaN(d.getTime())) return false;
+          if (t.status === 'inbox' && isThisWeek(d, { weekStartsOn: 1 })) return true;
+          if ((t.status === 'inbox' || t.status === 'week') && isPast(d) && !isToday(d) && !isThisWeek(d, { weekStartsOn: 1 })) return true;
+        } catch {
+          return false;
+        }
+        return false;
+      });
+
+      if (tasksToAutoPromote.length > 0) {
+        tasksToAutoPromote.forEach(t => {
+          try {
+            const d = parseISO(t.due_date!);
+            let newStatus: TaskStatus = t.status;
+            if (t.status === 'inbox' && isThisWeek(d, { weekStartsOn: 1 })) {
+              newStatus = 'week';
+            } else if (isPast(d) && !isToday(d) && !isThisWeek(d, { weekStartsOn: 1 })) {
+              newStatus = 'risk';
+            }
+            if (newStatus !== t.status) {
+              updateDoc(doc(db, 'tasks', t.id), {
+                status: newStatus,
+                updated_at: new Date().toISOString(),
+              }).catch(err => console.error('Error auto-promoting task:', t.id, err));
+            }
+          } catch (e) {
+            console.error('Error in auto-promote task:', e);
+          }
+        });
+      }
+
       // Sort in memory by position and created_at
       items.sort((a, b) => {
         if ((a.position ?? 0) !== (b.position ?? 0)) {
@@ -104,6 +140,15 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     if (!profile) return;
 
     try {
+      let initialStatus: TaskStatus = taskData.status || 'inbox';
+      if (!taskData.status && taskData.due_date) {
+        if (isThisWeek(taskData.due_date, { weekStartsOn: 1 })) {
+          initialStatus = 'week';
+        } else if (isPast(taskData.due_date) && !isToday(taskData.due_date)) {
+          initialStatus = 'risk';
+        }
+      }
+
       const newTask = {
         title: taskData.title,
         priority: taskData.priority,
@@ -119,7 +164,7 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
         notion_page_id: taskData.notion_page_id || null,
         notion_database_id: taskData.notion_database_id || null,
         created_by: profile.id,
-        status: taskData.status || 'inbox',
+        status: initialStatus,
         position: 0,
         completed_at: null,
         created_at: new Date().toISOString(),

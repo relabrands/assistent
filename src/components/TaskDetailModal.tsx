@@ -131,10 +131,14 @@ export function TaskDetailModal({
 
   const handleStatusChange = (newStatus: TaskStatus) => {
     if (!task || !onUpdateTask) return;
-    onUpdateTask(task.id, { 
+    const updates: Partial<Task> = { 
       status: newStatus,
       completed_at: newStatus === 'completed' ? new Date().toISOString() : null,
-    });
+    };
+    if (newStatus === 'inbox' && task.due_date) {
+      updates.due_date = null;
+    }
+    onUpdateTask(task.id, updates);
   };
 
   const handlePriorityChange = (newPriority: TaskPriority) => {

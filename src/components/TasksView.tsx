@@ -53,9 +53,37 @@ import { isToday, isPast, parseISO, isThisWeek } from 'date-fns';
 type GroupBy = 'status' | 'project' | 'priority' | 'client';
 type ViewMode = 'list' | 'board';
 
-const STATUS_CONFIG: Record<TaskStatus, { label: string; icon: React.ReactNode; color: string; bgColor: string; dotColor: string; accentColor: string }> = {
+export function getSmartTaskStatus(task: Task): TaskStatus {
+  if (task.status === 'completed') return 'completed';
+  if (task.notion_page_id) return task.status;
+  if (!task.due_date) return task.status || 'inbox';
+
+  try {
+    const dueDate = parseISO(task.due_date);
+    if (isNaN(dueDate.getTime())) return task.status || 'inbox';
+
+    // 1. Due this week (Monday to Sunday of current week) -> belongs in 'week'
+    if (isThisWeek(dueDate, { weekStartsOn: 1 })) {
+      if (task.status === 'inbox') return 'week';
+      return task.status;
+    }
+
+    // 2. Overdue prior to current week -> belongs in 'risk'
+    if (isPast(dueDate) && !isToday(dueDate)) {
+      if (task.status === 'inbox' || task.status === 'week') return 'risk';
+      return task.status;
+    }
+
+    return task.status || 'inbox';
+  } catch {
+    return task.status || 'inbox';
+  }
+}
+
+const STATUS_CONFIG: Record<TaskStatus, { label: string; sublabel: string; icon: React.ReactNode; color: string; bgColor: string; dotColor: string; accentColor: string }> = {
   inbox: {
     label: 'Inbox',
+    sublabel: 'Sin programar',
     icon: <Inbox className="w-4 h-4" />,
     color: 'text-slate-600 dark:text-slate-400',
     bgColor: 'bg-slate-50 dark:bg-slate-900/40',
@@ -64,6 +92,7 @@ const STATUS_CONFIG: Record<TaskStatus, { label: string; icon: React.ReactNode; 
   },
   week: {
     label: 'Esta Semana',
+    sublabel: 'Vence esta semana',
     icon: <CalendarDays className="w-4 h-4" />,
     color: 'text-blue-600 dark:text-blue-400',
     bgColor: 'bg-blue-50/70 dark:bg-blue-950/30',
@@ -72,6 +101,7 @@ const STATUS_CONFIG: Record<TaskStatus, { label: string; icon: React.ReactNode; 
   },
   risk: {
     label: 'En Riesgo',
+    sublabel: 'Vencidas o alertas',
     icon: <AlertTriangle className="w-4 h-4" />,
     color: 'text-amber-600 dark:text-amber-400',
     bgColor: 'bg-amber-50/70 dark:bg-amber-950/30',
@@ -80,6 +110,7 @@ const STATUS_CONFIG: Record<TaskStatus, { label: string; icon: React.ReactNode; 
   },
   completed: {
     label: 'Completadas',
+    sublabel: 'Finalizadas',
     icon: <CheckCircle2 className="w-4 h-4" />,
     color: 'text-emerald-600 dark:text-emerald-400',
     bgColor: 'bg-emerald-50/70 dark:bg-emerald-950/30',
@@ -139,25 +170,45 @@ export function TasksView({
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } })
   );
 
-  // Split tasks: notion/content vs regular
+  // Split tasks: notion/content vs regular with smart auto-categorization
   const notionContentTasks = useMemo(() => tasks.filter(t => t.notion_page_id && t.status !== 'completed'), [tasks]);
-  const regularTasks = useMemo(() => tasks.filter(t => !t.notion_page_id), [tasks]);
+
+  const smartRegularTasks = useMemo(() => {
+    return tasks
+      .filter(t => !t.notion_page_id)
+      .map(t => {
+        const smart = getSmartTaskStatus(t);
+        if (smart !== t.status) {
+          return { ...t, status: smart };
+        }
+        return t;
+      });
+  }, [tasks]);
+
+  const allSmartTasks = useMemo(() => {
+    return tasks.map(t => {
+      if (t.notion_page_id) return t;
+      const smart = getSmartTaskStatus(t);
+      if (smart !== t.status) return { ...t, status: smart };
+      return t;
+    });
+  }, [tasks]);
 
   const stats = useMemo(() => {
-    const active = tasks.filter(t => t.status !== 'completed');
-    const completedToday = tasks.filter(t => t.status === 'completed' && t.completed_at && isToday(parseISO(t.completed_at)));
-    const overdue = tasks.filter(t => t.status !== 'completed' && t.due_date && isPast(parseISO(t.due_date)));
+    const active = allSmartTasks.filter(t => t.status !== 'completed');
+    const completedToday = allSmartTasks.filter(t => t.status === 'completed' && t.completed_at && isToday(parseISO(t.completed_at)));
+    const overdue = allSmartTasks.filter(t => t.status !== 'completed' && t.due_date && isPast(parseISO(t.due_date)) && !isToday(parseISO(t.due_date)));
     return {
       total: active.length,
       completedToday: completedToday.length,
       overdue: overdue.length,
-      atRisk: tasks.filter(t => t.status === 'risk').length,
+      atRisk: smartRegularTasks.filter(t => t.status === 'risk').length,
       contentPending: notionContentTasks.length,
     };
-  }, [tasks, notionContentTasks]);
+  }, [allSmartTasks, smartRegularTasks, notionContentTasks]);
 
-  const filteredByFilters = useMemo(() => filterTasks(tasks, filters, clients), [tasks, filters, clients]);
-  const filteredRegular = useMemo(() => filterTasks(regularTasks, filters, clients), [regularTasks, filters, clients]);
+  const filteredByFilters = useMemo(() => filterTasks(allSmartTasks, filters, clients), [allSmartTasks, filters, clients]);
+  const filteredRegular = useMemo(() => filterTasks(smartRegularTasks, filters, clients), [smartRegularTasks, filters, clients]);
   const filteredContent = useMemo(() => filterTasks(notionContentTasks, filters, clients), [notionContentTasks, filters, clients]);
 
   const filteredTasks = useMemo(() => {
@@ -165,7 +216,7 @@ export function TasksView({
     return filteredByFilters.filter(t => t.status === activeTab);
   }, [filteredByFilters, activeTab]);
 
-  const activeDragTask = useMemo(() => tasks.find(t => t.id === activeDragId) || null, [tasks, activeDragId]);
+  const activeDragTask = useMemo(() => allSmartTasks.find(t => t.id === activeDragId) || null, [allSmartTasks, activeDragId]);
 
   const groupedTasks = useMemo(() => {
     if (groupBy === 'status') {
@@ -249,11 +300,19 @@ export function TasksView({
     let targetStatus: TaskStatus | null = null;
     if (STATUSES.includes(overId as TaskStatus)) targetStatus = overId as TaskStatus;
     else if (overId.startsWith('stage-')) targetStatus = overId.replace('stage-', '') as TaskStatus;
-    else { const overTask = tasks.find(t => t.id === overId); if (overTask) targetStatus = overTask.status; }
+    else { const overTask = allSmartTasks.find(t => t.id === overId); if (overTask) targetStatus = overTask.status; }
     if (targetStatus) {
-      const currentTask = tasks.find(t => t.id === taskId);
+      const currentTask = allSmartTasks.find(t => t.id === taskId);
       if (currentTask && currentTask.status !== targetStatus) {
-        onUpdateTask(taskId, { status: targetStatus, completed_at: targetStatus === 'completed' ? new Date().toISOString() : null });
+        const updates: any = {
+          status: targetStatus,
+          completed_at: targetStatus === 'completed' ? new Date().toISOString() : null,
+        };
+        // If moving back to inbox, clear the due_date so it stays in Inbox as unscheduled
+        if (targetStatus === 'inbox' && currentTask.due_date) {
+          updates.due_date = null;
+        }
+        onUpdateTask(taskId, updates);
       }
     }
   };
@@ -452,7 +511,10 @@ function DroppableKanbanColumn({ statusKey, tasks, projects, profiles, filters, 
             <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${config.accentColor}18` }}>
               <span style={{ color: config.accentColor }}>{config.icon}</span>
             </div>
-            <p className="font-bold text-[11px] text-foreground uppercase tracking-wider">{config.label}</p>
+            <div>
+              <p className="font-bold text-[11px] text-foreground uppercase tracking-wider leading-none">{config.label}</p>
+              <p className="text-[9px] text-muted-foreground/70 font-medium mt-0.5">{config.sublabel}</p>
+            </div>
           </div>
           <Badge variant="secondary" className="h-5 px-1.5 text-[11px] font-bold tabular-nums" style={{ color: config.accentColor }}>
             {tasks.length}
@@ -568,8 +630,8 @@ function ContentKanbanCard({ task, projects, profiles, onOpenDetailModal, onUpda
 }) {
   const project = projects.find(p => p.id === task.project_id);
   const assignee = profiles.find(p => p.id === task.assigned_to);
-  const isOverdue = task.due_date && isPast(parseISO(task.due_date)) && task.status !== 'completed';
-  const isDueToday = task.due_date && isToday(parseISO(task.due_date));
+  const isDueToday = task.due_date ? isToday(parseISO(task.due_date)) : false;
+  const isOverdue = task.due_date ? (isPast(parseISO(task.due_date)) && !isDueToday && task.status !== 'completed') : false;
 
   return (
     <div
@@ -602,9 +664,16 @@ function ContentKanbanCard({ task, projects, profiles, onOpenDetailModal, onUpda
         <div className="flex items-center justify-between pt-1 border-t border-violet-100/70 dark:border-violet-900/30">
           {task.due_date ? (
             <span className={cn('flex items-center gap-1 text-[10px] font-medium',
-              isOverdue ? 'text-red-500' : isDueToday ? 'text-amber-500' : 'text-muted-foreground')}>
+              isOverdue ? 'text-red-500' : isDueToday ? 'text-amber-500 font-semibold' : 'text-muted-foreground')}>
               <CalendarDays className="w-2.5 h-2.5" />
-              {new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
+              {isDueToday ? (
+                <span className="flex items-center gap-1">
+                  <span className="px-1 py-0.2 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[8px] font-bold">Hoy</span>
+                  <span>{new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}</span>
+                </span>
+              ) : (
+                new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })
+              )}
             </span>
           ) : <span className="text-[10px] text-muted-foreground/50">Sin fecha</span>}
           <div className="flex items-center gap-1">
@@ -634,6 +703,9 @@ function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailMod
   const style = { transform: CSS.Translate.toString(transform), transition };
   const project = projects.find(p => p.id === task.project_id);
   const assignee = profiles.find(p => p.id === task.assigned_to);
+
+  const isDueToday = task.due_date ? isToday(parseISO(task.due_date)) : false;
+  const isOverdue = task.due_date ? (isPast(parseISO(task.due_date)) && !isDueToday && task.status !== 'completed') : false;
 
   const advanceTaskStatus = (t: Task) => {
     const nextMap: Record<TaskStatus, TaskStatus> = { inbox: 'week', week: 'completed', risk: 'completed', completed: 'inbox' };
@@ -676,10 +748,17 @@ function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailMod
         <div>
           {task.due_date ? (
             <span className={cn('flex items-center gap-1',
-              isPast(parseISO(task.due_date)) && task.status !== 'completed' ? 'text-red-500 font-semibold' :
-              isToday(parseISO(task.due_date)) ? 'text-amber-500 font-semibold' : 'text-muted-foreground')}>
+              isOverdue ? 'text-red-500 font-semibold' :
+              isDueToday ? 'text-amber-500 font-semibold' : 'text-muted-foreground')}>
               <CalendarDays className="w-2.5 h-2.5" />
-              {new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
+              {isDueToday ? (
+                <span className="flex items-center gap-1">
+                  <span className="px-1 py-0.2 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[8px] font-bold">Hoy</span>
+                  <span>{new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}</span>
+                </span>
+              ) : (
+                new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })
+              )}
             </span>
           ) : <span className="text-[10px] text-muted-foreground/60">Sin fecha</span>}
         </div>
@@ -795,14 +874,25 @@ function SortableListCard({ task, projects, profiles, filters, onUpdateTask, onO
                 <span className="font-bold">N</span> Notion
               </span>
             )}
-            {task.due_date && (
-              <span className={cn('text-[11px] flex items-center gap-1',
-                isPast(parseISO(task.due_date)) && task.status !== 'completed' ? 'text-red-500 font-medium' :
-                isToday(parseISO(task.due_date)) ? 'text-amber-500 font-medium' : 'text-muted-foreground')}>
-                <CalendarDays className="w-2.5 h-2.5" />
-                {new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}
-              </span>
-            )}
+            {task.due_date && (() => {
+              const isDueToday = isToday(parseISO(task.due_date));
+              const isOverdue = isPast(parseISO(task.due_date)) && !isDueToday && task.status !== 'completed';
+              return (
+                <span className={cn('text-[11px] flex items-center gap-1',
+                  isOverdue ? 'text-red-500 font-medium' :
+                  isDueToday ? 'text-amber-500 font-medium' : 'text-muted-foreground')}>
+                  <CalendarDays className="w-2.5 h-2.5" />
+                  {isDueToday ? (
+                    <span className="flex items-center gap-1">
+                      <span className="px-1 py-0.2 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[8px] font-bold">Hoy</span>
+                      <span>{new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })}</span>
+                    </span>
+                  ) : (
+                    new Date(task.due_date).toLocaleDateString('es', { month: 'short', day: 'numeric' })
+                  )}
+                </span>
+              );
+            })()}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">

@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { CalendarIcon, Loader2, User } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isThisWeek } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { Task, TaskPriority, Profile, Project, LifeArea, TaskStatus, LIFE_AREA_LABELS, LIFE_AREA_COLORS } from '@/types/database';
@@ -88,6 +88,13 @@ export function EditTaskModal({
   const [projectClients, setProjectClients] = useState<Client[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const handleSelectDueDate = (date: Date | undefined) => {
+    setDueDate(date);
+    if (date && status === 'inbox' && isThisWeek(date, { weekStartsOn: 1 })) {
+      setStatus('week');
+    }
+  };
 
   // Load clients when project changes (fallback if clients prop not provided)
   useEffect(() => {
@@ -307,7 +314,7 @@ export function EditTaskModal({
                 <Calendar
                   mode="single"
                   selected={dueDate}
-                  onSelect={setDueDate}
+                  onSelect={handleSelectDueDate}
                   initialFocus
                 />
                 {dueDate && (
