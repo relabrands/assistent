@@ -84,22 +84,38 @@ export async function getConnectedNotionDatabases(): Promise<Array<{ id: string;
  * Fetches pages from a specific Notion database
  */
 export async function queryNotionDatabasePages(databaseId: string): Promise<any[]> {
-  const res = await fetch(`/api/notion/databases/${databaseId}/query`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${NOTION_TOKEN}`,
-      'Notion-Version': '2022-06-28',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ page_size: 100 }),
-  });
+  const allPages: any[] = [];
+  let cursor: string | undefined = undefined;
+  let hasMore = true;
+  let pageCount = 0;
 
-  if (!res.ok) {
-    throw new Error(`Error ${res.status}: ${await res.text()}`);
+  while (hasMore && pageCount < 10) {
+    pageCount++;
+    const body: any = { page_size: 100 };
+    if (cursor) body.start_cursor = cursor;
+
+    const res = await fetch(`/api/notion/databases/${databaseId}/query`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${NOTION_TOKEN}`,
+        'Notion-Version': '2022-06-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Error ${res.status}: ${await res.text()}`);
+    }
+
+    const data = await res.json();
+    allPages.push(...(data.results || []));
+    hasMore = !!data.has_more;
+    cursor = data.next_cursor;
+    if (!cursor) break;
   }
 
-  const data = await res.json();
-  return data.results || [];
+  return allPages;
 }
 
 /**
@@ -195,6 +211,7 @@ export async function runNotionSync({
     // 2. Fetch existing tasks from Firestore to avoid duplicate creation and clean obsolete ones
     onProgress?.({ step: 'Verificando tareas existentes en el CRM...', processed: 10, total: 100 });
     const tasksSnapshot = await getDocs(collection(db, 'tasks'));
+    const existingTasksMap = new Map<string, { id: string; ref: any; data: any }>();
     const existingNotionIds = new Set<string>();
     let cleanedOldTasksCount = 0;
 
@@ -206,6 +223,7 @@ export async function runNotionSync({
           cleanedOldTasksCount++;
           continue;
         }
+        existingTasksMap.set(data.notion_page_id, { id: docSnap.id, ref: docSnap.ref, data });
         existingNotionIds.add(data.notion_page_id);
       }
     }
@@ -288,18 +306,43 @@ export async function runNotionSync({
       for (const page of pages) {
         const props = page.properties || {};
         const title = props.Name?.title?.map((t: any) => t.plain_text || '').join('').trim() || 'Contenido sin título';
-        const postDate = props['Fecha para postear']?.date?.start || null;
-        const statusName = props['Estado']?.status?.name || props['Status']?.status?.name || 'Sin estado';
-        const isPosted = statusName.toLowerCase() === 'posteado';
+        const postDate = props['Fecha para postear']?.date?.start || props['Fecha']?.date?.start || props['Date']?.date?.start || null;
+        const statusName = props['Estado']?.status?.name || props['Status']?.status?.name || props['Estado']?.select?.name || props['Status']?.select?.name || 'Sin estado';
+        const rawStatus = statusName.toLowerCase();
+        const isPosted = rawStatus.includes('posteado') || rawStatus.includes('publicado');
+        const isDiscarded = rawStatus.includes('cancelad') || rawStatus.includes('descartad') || rawStatus.includes('rechazad') || rawStatus.includes('no va');
         const platforms: string[] = props['Plataforma']?.multi_select?.map((p: any) => p.name) || [];
 
-        // Count for this month
-        if (postDate && postDate.startsWith(currentMonthStr)) {
+        // Count for this month (only non-discarded posts)
+        if (postDate && postDate.startsWith(currentMonthStr) && !isDiscarded) {
           dbMonthPostsCount++;
         }
 
-        // Overdue check: scheduled date >= startDate AND scheduled date <= today AND not posted
-        if (postDate && postDate >= startDate && postDate <= todayStr && !isPosted) {
+        // Check if an existing overdue task in CRM needs to be auto-completed or auto-cancelled
+        const existingTask = existingTasksMap.get(page.id);
+        if (existingTask) {
+          if (isPosted && existingTask.data.status !== 'completed') {
+            await updateDoc(existingTask.ref, {
+              status: 'completed',
+              notes: (existingTask.data.notes || '') + `\n\n[Auto-Sync] Marcado como publicado en Notion ("${statusName}"). Tarea completada automáticamente.`,
+              updated_at: new Date().toISOString(),
+            });
+            existingTask.data.status = 'completed';
+          } else if (isDiscarded && existingTask.data.status !== 'cancelled') {
+            await updateDoc(existingTask.ref, {
+              status: 'cancelled',
+              cancellation_reason: 'cancelled_client',
+              cancellation_comment: `Contenido descartado o cancelado en Notion ("${statusName}").`,
+              cancelled_at: new Date().toISOString(),
+              cancelled_by: 'notion_sync',
+              updated_at: new Date().toISOString(),
+            });
+            existingTask.data.status = 'cancelled';
+          }
+        }
+
+        // Overdue check: scheduled date >= startDate AND scheduled date <= today AND not posted AND not discarded
+        if (postDate && postDate >= startDate && postDate <= todayStr && !isPosted && !isDiscarded) {
           dbOverdueCount++;
 
           if (!existingNotionIds.has(page.id)) {
@@ -328,7 +371,8 @@ export async function runNotionSync({
               updated_at: new Date().toISOString(),
             };
 
-            await addDoc(collection(db, 'tasks'), overdueTask);
+            const newDoc = await addDoc(collection(db, 'tasks'), overdueTask);
+            existingTasksMap.set(page.id, { id: newDoc.id, ref: newDoc, data: overdueTask });
             existingNotionIds.add(page.id);
             overdueCreated++;
           }
@@ -336,7 +380,6 @@ export async function runNotionSync({
 
         // Sync into content_items for Client Calendar & List
         if (postDate && postDate >= startDate) {
-          const rawStatus = statusName.toLowerCase();
           let contentStatus: any = 'pending_review';
           if (rawStatus.includes('posteado') || rawStatus.includes('publicado')) {
             contentStatus = 'published';
@@ -407,15 +450,48 @@ export async function runNotionSync({
         }
       }
 
-      // Quota check
+      // Quota check & Auto-resolution
       let createdQuotaAlert = false;
-      if (dbMonthPostsCount < clientQuota) {
-        const quotaDedupeKey = `quota_${normalizeName(clientName)}_${currentMonthStr}`;
+      const quotaDedupeKey = `quota_${normalizeName(clientName)}_${currentMonthStr}`;
+      const existingQuotaTask = existingTasksMap.get(quotaDedupeKey);
 
-        if (!existingNotionIds.has(quotaDedupeKey)) {
+      // Find any active quota alerts for this client in the current month
+      const matchingQuotaTasks = Array.from(existingTasksMap.values()).filter(t =>
+        t.data.notion_page_id === quotaDedupeKey ||
+        (t.data.client === clientName && t.data.title && t.data.title.includes('Alerta Volumen') && t.data.title.includes(currentMonthLabel))
+      );
+
+      if (dbMonthPostsCount >= clientQuota) {
+        // Quota is fulfilled! Remove any open volume alert tasks for this client
+        for (const qTask of matchingQuotaTasks) {
+          await deleteDoc(qTask.ref);
+          existingTasksMap.delete(qTask.data.notion_page_id);
+          existingNotionIds.delete(qTask.data.notion_page_id);
+          console.log(`[NotionSync] Quota fulfilled for ${clientName} (${dbMonthPostsCount}/${clientQuota}). Removed alert task ${qTask.id}`);
+        }
+      } else {
+        // Quota is below target
+        const missingCount = clientQuota - dbMonthPostsCount;
+        const alertTitle = `🚨 Alerta Volumen: ${clientName} (${dbMonthPostsCount}/${clientQuota} contenidos en ${currentMonthLabel})`;
+        const alertDesc = `El cliente ${clientName} solo tiene ${dbMonthPostsCount} contenido(s) programado(s) para ${currentMonthLabel} en Notion. La cuota mensual mínima establecida es de ${clientQuota} contenidos.\n\nSe requiere planificar, redactar y programar ${missingCount} nuevo(s) contenido(s) para alcanzar el objetivo mensual.`;
+
+        if (existingQuotaTask) {
+          // Update existing alert with up-to-date numbers
+          await updateDoc(existingQuotaTask.ref, {
+            title: alertTitle,
+            description: alertDesc,
+            due_date: todayStr,
+            subtasks: [
+              { id: 'st-q1', title: `Proponer ${missingCount} ideas de contenidos nuevos`, completed: false },
+              { id: 'st-q2', title: 'Enviar a aprobación del cliente o dirección', completed: false },
+              { id: 'st-q3', title: 'Registrar y programar en Notion con fechas', completed: false },
+            ],
+            updated_at: new Date().toISOString(),
+          });
+        } else {
           const quotaTask = {
-            title: `🚨 Alerta Volumen: ${clientName} (${dbMonthPostsCount}/${clientQuota} contenidos en ${currentMonthLabel})`,
-            description: `El cliente ${clientName} solo tiene ${dbMonthPostsCount} contenido(s) programado(s) para ${currentMonthLabel} en Notion. La cuota mensual mínima establecida es de ${clientQuota} contenidos.\n\nSe requiere planificar, redactar y programar nuevos contenidos para alcanzar el objetivo mensual.`,
+            title: alertTitle,
+            description: alertDesc,
             status: 'inbox',
             priority: 'high',
             client: clientName,
@@ -428,7 +504,7 @@ export async function runNotionSync({
             notion_database_id: dbItem.id,
             position: 0,
             subtasks: [
-              { id: 'st-q1', title: `Proponer ${clientQuota - dbMonthPostsCount} ideas de contenidos nuevos`, completed: false },
+              { id: 'st-q1', title: `Proponer ${missingCount} ideas de contenidos nuevos`, completed: false },
               { id: 'st-q2', title: 'Enviar a aprobación del cliente o dirección', completed: false },
               { id: 'st-q3', title: 'Registrar y programar en Notion con fechas', completed: false },
             ],
@@ -438,7 +514,8 @@ export async function runNotionSync({
             updated_at: new Date().toISOString(),
           };
 
-          await addDoc(collection(db, 'tasks'), quotaTask);
+          const newDoc = await addDoc(collection(db, 'tasks'), quotaTask);
+          existingTasksMap.set(quotaDedupeKey, { id: newDoc.id, ref: newDoc, data: quotaTask });
           existingNotionIds.add(quotaDedupeKey);
           quotaAlertsCreated++;
           createdQuotaAlert = true;
@@ -456,6 +533,7 @@ export async function runNotionSync({
         quota: clientQuota,
       });
     }
+
 
     onProgress?.({ step: '¡Sincronización completada con éxito!', processed: 100, total: 100 });
 
