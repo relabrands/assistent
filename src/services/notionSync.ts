@@ -83,7 +83,7 @@ export async function getConnectedNotionDatabases(): Promise<Array<{ id: string;
 /**
  * Fetches pages from a specific Notion database
  */
-export async function queryNotionDatabasePages(databaseId: string): Promise<any[]> {
+export async function queryNotionDatabasePages(databaseId: string, startDate?: string): Promise<any[]> {
   const allPages: any[] = [];
   let cursor: string | undefined = undefined;
   let hasMore = true;
@@ -92,9 +92,15 @@ export async function queryNotionDatabasePages(databaseId: string): Promise<any[
   while (hasMore && pageCount < 10) {
     pageCount++;
     const body: any = { page_size: 100 };
+    if (startDate) {
+      body.filter = {
+        property: 'Fecha para postear',
+        date: { on_or_after: startDate },
+      };
+    }
     if (cursor) body.start_cursor = cursor;
 
-    const res = await fetch(`/api/notion/databases/${databaseId}/query`, {
+    let res = await fetch(`/api/notion/databases/${databaseId}/query`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${NOTION_TOKEN}`,
@@ -103,6 +109,21 @@ export async function queryNotionDatabasePages(databaseId: string): Promise<any[
       },
       body: JSON.stringify(body),
     });
+
+    // If filter on 'Fecha para postear' failed (e.g. 400), retry without filter as safe fallback
+    if (!res.ok && startDate && body.filter) {
+      console.warn(`[NotionSync] Filter by 'Fecha para postear' failed (${res.status}), retrying without Notion filter...`);
+      delete body.filter;
+      res = await fetch(`/api/notion/databases/${databaseId}/query`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${NOTION_TOKEN}`,
+          'Notion-Version': '2022-06-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    }
 
     if (!res.ok) {
       throw new Error(`Error ${res.status}: ${await res.text()}`);
@@ -295,7 +316,7 @@ export async function runNotionSync({
 
       let pages: any[] = [];
       try {
-        pages = await queryNotionDatabasePages(dbItem.id);
+        pages = await queryNotionDatabasePages(dbItem.id, startDate);
       } catch (err) {
         console.warn(`[NotionSync] Could not query database ${dbItem.title}:`, err);
       }

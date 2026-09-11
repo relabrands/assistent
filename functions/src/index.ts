@@ -216,6 +216,12 @@ export async function syncNotionLogic({
     while (hasMore && pageCount < 10) {
       pageCount++;
       const body: any = { page_size: 100 };
+      if (startDate) {
+        body.filter = {
+          property: "Fecha para postear",
+          date: { on_or_after: startDate }
+        };
+      }
       if (cursor) body.start_cursor = cursor;
 
       let queryRes: Response;
@@ -234,6 +240,25 @@ export async function syncNotionLogic({
         break;
       }
 
+      // If filter failed (e.g. 400), retry without filter as safe fallback
+      if (!queryRes.ok && startDate && body.filter) {
+        delete body.filter;
+        try {
+          queryRes = await fetch(`https://api.notion.com/v1/databases/${dbItem.id}/query`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${NOTION_API_KEY}`,
+              "Notion-Version": NOTION_VERSION,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body)
+          });
+        } catch (fetchErr) {
+          console.error(`[NotionSync] Network error retrying DB ${dbItem.title}:`, fetchErr);
+          break;
+        }
+      }
+
       if (!queryRes.ok) {
         console.warn(`[NotionSync] Failed querying DB ${dbItem.title} (${queryRes.status}):`, await queryRes.text());
         break;
@@ -245,6 +270,7 @@ export async function syncNotionLogic({
       cursor = queryData.next_cursor;
       if (!cursor) break;
     }
+
 
     let dbOverdueCount = 0;
     let dbMonthPostsCount = 0;
