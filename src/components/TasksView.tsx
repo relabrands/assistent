@@ -46,15 +46,20 @@ import {
   GripVertical,
   Activity,
   ImageOff,
+  Ban,
+  RotateCcw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isToday, isPast, parseISO, isThisWeek } from 'date-fns';
+import { collection, addDoc } from 'firebase/firestore';
+import { db } from '@/integrations/firebase/client';
+import { CancelTaskModal } from './CancelTaskModal';
 
 type GroupBy = 'status' | 'project' | 'priority' | 'client';
 type ViewMode = 'list' | 'board';
 
 export function getSmartTaskStatus(task: Task): TaskStatus {
-  if (task.status === 'completed') return 'completed';
+  if (task.status === 'completed' || task.status === 'cancelled') return task.status;
   if (task.notion_page_id) return task.status;
   if (!task.due_date) return task.status || 'inbox';
 
@@ -117,9 +122,20 @@ const STATUS_CONFIG: Record<TaskStatus, { label: string; sublabel: string; icon:
     dotColor: 'bg-emerald-500',
     accentColor: '#10b981',
   },
+  cancelled: {
+    label: 'Canceladas',
+    sublabel: 'Descartadas',
+    icon: <Ban className="w-4 h-4" />,
+    color: 'text-rose-600 dark:text-rose-400',
+    bgColor: 'bg-rose-50/70 dark:bg-rose-950/30',
+    dotColor: 'bg-rose-500',
+    accentColor: '#f43f5e',
+  },
 };
 
-const STATUSES: TaskStatus[] = ['inbox', 'week', 'risk', 'completed'];
+const PIPELINE_STATUSES: TaskStatus[] = ['inbox', 'week', 'risk', 'completed'];
+const ALL_STATUSES: TaskStatus[] = ['inbox', 'week', 'risk', 'completed', 'cancelled'];
+const STATUSES: TaskStatus[] = PIPELINE_STATUSES;
 
 const PRIORITY_CONFIG = {
   high: { label: 'Alta', color: 'text-red-600', bg: 'bg-red-50 dark:bg-red-900/20', dot: 'bg-red-500' },
@@ -164,6 +180,8 @@ export function TasksView({
   const [viewMode, setViewMode] = useState<ViewMode>('board');
   const [groupBy, setGroupBy] = useState<GroupBy>('status');
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [showCancelledInBoard, setShowCancelledInBoard] = useState(false);
+  const [cancellingTask, setCancellingTask] = useState<Task | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -195,15 +213,17 @@ export function TasksView({
   }, [tasks]);
 
   const stats = useMemo(() => {
-    const active = allSmartTasks.filter(t => t.status !== 'completed');
+    const active = allSmartTasks.filter(t => t.status !== 'completed' && t.status !== 'cancelled');
     const completedToday = allSmartTasks.filter(t => t.status === 'completed' && t.completed_at && isToday(parseISO(t.completed_at)));
-    const overdue = allSmartTasks.filter(t => t.status !== 'completed' && t.due_date && isPast(parseISO(t.due_date)) && !isToday(parseISO(t.due_date)));
+    const overdue = allSmartTasks.filter(t => t.status !== 'completed' && t.status !== 'cancelled' && t.due_date && isPast(parseISO(t.due_date)) && !isToday(parseISO(t.due_date)));
+    const cancelledCount = allSmartTasks.filter(t => t.status === 'cancelled').length;
     return {
       total: active.length,
       completedToday: completedToday.length,
       overdue: overdue.length,
       atRisk: smartRegularTasks.filter(t => t.status === 'risk').length,
       contentPending: notionContentTasks.length,
+      cancelled: cancelledCount,
     };
   }, [allSmartTasks, smartRegularTasks, notionContentTasks]);
 
@@ -221,7 +241,7 @@ export function TasksView({
   const groupedTasks = useMemo(() => {
     if (groupBy === 'status') {
       const grouped: Record<string, Task[]> = {};
-      STATUSES.forEach(s => { grouped[s] = []; });
+      ALL_STATUSES.forEach(s => { grouped[s] = []; });
       filteredTasks.forEach(t => { if (grouped[t.status]) grouped[t.status].push(t); });
       return grouped;
     }
@@ -262,7 +282,7 @@ export function TasksView({
 
   const tabCounts = useMemo(() => {
     const result: Record<string, number> = { all: filteredByFilters.length };
-    STATUSES.forEach(s => { result[s] = filteredByFilters.filter(t => t.status === s).length; });
+    ALL_STATUSES.forEach(s => { result[s] = filteredByFilters.filter(t => t.status === s).length; });
     return result;
   }, [filteredByFilters]);
 
@@ -298,12 +318,16 @@ export function TasksView({
     const taskId = String(active.id);
     const overId = String(over.id);
     let targetStatus: TaskStatus | null = null;
-    if (STATUSES.includes(overId as TaskStatus)) targetStatus = overId as TaskStatus;
+    if (ALL_STATUSES.includes(overId as TaskStatus)) targetStatus = overId as TaskStatus;
     else if (overId.startsWith('stage-')) targetStatus = overId.replace('stage-', '') as TaskStatus;
     else { const overTask = allSmartTasks.find(t => t.id === overId); if (overTask) targetStatus = overTask.status; }
     if (targetStatus) {
       const currentTask = allSmartTasks.find(t => t.id === taskId);
       if (currentTask && currentTask.status !== targetStatus) {
+        if (targetStatus === 'cancelled') {
+          setCancellingTask(currentTask);
+          return;
+        }
         const updates: any = {
           status: targetStatus,
           completed_at: targetStatus === 'completed' ? new Date().toISOString() : null,
@@ -312,7 +336,61 @@ export function TasksView({
         if (targetStatus === 'inbox' && currentTask.due_date) {
           updates.due_date = null;
         }
+        // If moving out of cancelled, clear cancellation metadata
+        if (currentTask.status === 'cancelled') {
+          updates.cancellation_reason = null;
+          updates.cancellation_comment = null;
+          updates.cancelled_at = null;
+          updates.cancelled_by = null;
+        }
         onUpdateTask(taskId, updates);
+      }
+    }
+  };
+
+  const handleConfirmCancelTask = async (taskId: string, reason: string, comment: string) => {
+    const success = await onUpdateTask(taskId, {
+      status: 'cancelled',
+      cancellation_reason: reason,
+      cancellation_comment: comment || null,
+      cancelled_at: new Date().toISOString(),
+      cancelled_by: currentProfileId || null,
+    });
+    if (success) {
+      try {
+        await addDoc(collection(db, 'task_notes'), {
+          task_id: taskId,
+          created_by: currentProfileId || null,
+          content: `🚫 Tarea descartada / rechazada.\nMotivo: ${reason}${comment ? `\nComentario: ${comment}` : ''}`,
+          created_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error('Error logging cancellation note:', e);
+      }
+      setCancellingTask(null);
+      return true;
+    }
+    return false;
+  };
+
+  const handleReactivateTask = async (taskId: string) => {
+    const ok = await onUpdateTask(taskId, {
+      status: 'inbox',
+      cancellation_reason: null,
+      cancellation_comment: null,
+      cancelled_at: null,
+      cancelled_by: null,
+    });
+    if (ok) {
+      try {
+        await addDoc(collection(db, 'task_notes'), {
+          task_id: taskId,
+          created_by: currentProfileId || null,
+          content: `🔄 Tarea reactivada y enviada a Inbox.`,
+          created_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error('Error logging reactivate note:', e);
       }
     }
   };
@@ -347,21 +425,39 @@ export function TasksView({
           {viewMode === 'list' ? (
             <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0 w-full sm:w-auto">
               <TabButton active={activeTab === 'all'} onClick={() => setActiveTab('all')} count={tabCounts.all}>Todas</TabButton>
-              {STATUSES.map(s => (
-                <TabButton key={s} active={activeTab === s} onClick={() => setActiveTab(s)} count={tabCounts[s]} icon={STATUS_CONFIG[s].icon} color={STATUS_CONFIG[s].color}>
+              {ALL_STATUSES.map(s => (
+                <TabButton key={s} active={activeTab === s} onClick={() => setActiveTab(s)} count={tabCounts[s] || 0} icon={STATUS_CONFIG[s].icon} color={STATUS_CONFIG[s].color}>
                   {STATUS_CONFIG[s].label}
                 </TabButton>
               ))}
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium">
-              <Sparkles className="w-3.5 h-3.5 text-primary" />
-              <span>Arrastra tarjetas entre columnas para cambiar su etapa</span>
-              <Badge variant="secondary" className="h-5 px-1.5 text-xs font-semibold ml-1">{filteredByFilters.length} tareas</Badge>
+            <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground font-medium">
+              <div className="flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span className="hidden md:inline">Arrastra tarjetas entre columnas para cambiar su etapa</span>
+              </div>
+              <Badge variant="secondary" className="h-5 px-1.5 text-xs font-semibold">{filteredByFilters.length} tareas</Badge>
               {filteredContent.length > 0 && (
                 <Badge className="h-5 px-1.5 text-xs font-semibold bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 border-0">
                   <ImageOff className="w-2.5 h-2.5 mr-1" />{filteredContent.length} contenido
                 </Badge>
+              )}
+              {stats.cancelled > 0 && (
+                <Button
+                  variant={showCancelledInBoard ? "secondary" : "outline"}
+                  size="sm"
+                  className={cn(
+                    "h-6 px-2 text-[11px] gap-1 transition-all ml-1",
+                    showCancelledInBoard
+                      ? "bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border-rose-200 dark:border-rose-800"
+                      : "text-muted-foreground hover:text-rose-600 hover:border-rose-200"
+                  )}
+                  onClick={() => setShowCancelledInBoard(!showCancelledInBoard)}
+                >
+                  <Ban className="w-3 h-3" />
+                  <span>{showCancelledInBoard ? 'Ocultar' : 'Ver'} descartadas ({stats.cancelled})</span>
+                </Button>
               )}
             </div>
           )}
@@ -406,7 +502,7 @@ export function TasksView({
         {viewMode === 'list' ? (
           <div className="flex-1 overflow-y-auto space-y-4 pr-1">
             {Object.entries(groupedTasks).map(([key, groupTasks]) => {
-              if (groupTasks.length === 0 && groupBy !== 'status') return null;
+              if (groupTasks.length === 0 && (groupBy !== 'status' || key === 'cancelled')) return null;
               const projectColor = getGroupProjectColor(key);
               const clientObj = groupBy === 'client' ? clients.find(c => c.id === key) : null;
               const isStageGroup = groupBy === 'status';
@@ -415,7 +511,9 @@ export function TasksView({
                   colorDot={getGroupColor(key)} projectColor={projectColor} clientObj={clientObj}
                   groupBg={activeTab === 'all' ? getGroupBg(key) : ''} projects={projects} profiles={profiles}
                   filters={filters} onUpdateTask={onUpdateTask} onOpenDetailModal={onOpenDetailModal}
-                  onOpenEditModal={onOpenEditModal} onClientTagClick={handleClientTagClick} />
+                  onOpenEditModal={onOpenEditModal} onClientTagClick={handleClientTagClick}
+                  onCancelTask={(t) => setCancellingTask(t)}
+                  onReactivateTask={handleReactivateTask} />
               );
             })}
             {filteredTasks.length === 0 && (
@@ -431,7 +529,7 @@ export function TasksView({
             )}
           </div>
         ) : (
-          /* Board Mode — 4 pipeline columns + 1 content column */
+          /* Board Mode — 4 pipeline columns + 1 content column + optional cancelled column */
           <div className="flex-1 overflow-x-auto overflow-y-hidden pb-2">
             <div className="flex gap-3 h-full min-w-[1020px]">
               {STATUSES.map((statusKey) => (
@@ -440,6 +538,8 @@ export function TasksView({
                   tasks={filteredRegular.filter(t => t.status === statusKey)}
                   projects={projects} profiles={profiles} filters={filters}
                   onOpenDetailModal={onOpenDetailModal} onUpdateTask={onUpdateTask} onClientTagClick={handleClientTagClick}
+                  onCancelTask={(t) => setCancellingTask(t)}
+                  onReactivateTask={handleReactivateTask}
                 />
               ))}
               {/* Divider */}
@@ -451,6 +551,22 @@ export function TasksView({
                 tasks={filteredContent} projects={projects} profiles={profiles} filters={filters}
                 onOpenDetailModal={onOpenDetailModal} onUpdateTask={onUpdateTask} onClientTagClick={handleClientTagClick}
               />
+              {/* Cancelled Column (toggleable) */}
+              {showCancelledInBoard && (
+                <>
+                  <div className="flex items-stretch shrink-0 py-2">
+                    <div className="w-px bg-gradient-to-b from-transparent via-rose-200 dark:via-rose-900/40 to-transparent" />
+                  </div>
+                  <DroppableKanbanColumn
+                    key="cancelled" statusKey="cancelled"
+                    tasks={filteredByFilters.filter(t => t.status === 'cancelled')}
+                    projects={projects} profiles={profiles} filters={filters}
+                    onOpenDetailModal={onOpenDetailModal} onUpdateTask={onUpdateTask} onClientTagClick={handleClientTagClick}
+                    onCancelTask={(t) => setCancellingTask(t)}
+                    onReactivateTask={handleReactivateTask}
+                  />
+                </>
+              )}
             </div>
           </div>
         )}
@@ -479,17 +595,26 @@ export function TasksView({
           </div>
         )}
       </DragOverlay>
+
+      <CancelTaskModal
+        open={!!cancellingTask}
+        onOpenChange={(open) => { if (!open) setCancellingTask(null); }}
+        task={cancellingTask}
+        onConfirmCancel={handleConfirmCancelTask}
+      />
     </DndContext>
   );
 }
 
 // ─── Kanban Column (Pipeline) ──────────────────────────────────────────────
 
-function DroppableKanbanColumn({ statusKey, tasks, projects, profiles, filters, onOpenDetailModal, onUpdateTask, onClientTagClick }: {
+function DroppableKanbanColumn({ statusKey, tasks, projects, profiles, filters, onOpenDetailModal, onUpdateTask, onClientTagClick, onCancelTask, onReactivateTask }: {
   statusKey: TaskStatus; tasks: Task[]; projects: Project[]; profiles: Profile[];
   filters: TaskFiltersState; onOpenDetailModal?: (task: Task) => void;
   onUpdateTask: (id: string, data: any) => Promise<boolean>;
   onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+  onCancelTask?: (task: Task) => void;
+  onReactivateTask?: (taskId: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: statusKey });
   const config = STATUS_CONFIG[statusKey];
@@ -526,7 +651,9 @@ function DroppableKanbanColumn({ statusKey, tasks, projects, profiles, filters, 
         <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
           {tasks.map(task => (
             <SortableKanbanCard key={task.id} task={task} projects={projects} profiles={profiles}
-              filters={filters} onOpenDetailModal={onOpenDetailModal} onUpdateTask={onUpdateTask} onClientTagClick={onClientTagClick} />
+              filters={filters} onOpenDetailModal={onOpenDetailModal} onUpdateTask={onUpdateTask} onClientTagClick={onClientTagClick}
+              onCancelTask={onCancelTask}
+              onReactivateTask={onReactivateTask} />
           ))}
           {tasks.length === 0 && (
             <div className={cn('flex items-center justify-center h-24 border-2 border-dashed rounded-xl text-center transition-all duration-200',
@@ -693,11 +820,13 @@ function ContentKanbanCard({ task, projects, profiles, onOpenDetailModal, onUpda
 
 // ─── Sortable Kanban Card (Regular) ──────────────────────────────────────
 
-function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailModal, onUpdateTask, onClientTagClick }: {
+function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailModal, onUpdateTask, onClientTagClick, onCancelTask, onReactivateTask }: {
   task: Task; projects: Project[]; profiles: Profile[];
   filters: TaskFiltersState; onOpenDetailModal?: (task: Task) => void;
   onUpdateTask: (id: string, data: any) => Promise<boolean>;
   onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+  onCancelTask?: (task: Task) => void;
+  onReactivateTask?: (taskId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style = { transform: CSS.Translate.toString(transform), transition };
@@ -705,10 +834,10 @@ function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailMod
   const assignee = profiles.find(p => p.id === task.assigned_to);
 
   const isDueToday = task.due_date ? isToday(parseISO(task.due_date)) : false;
-  const isOverdue = task.due_date ? (isPast(parseISO(task.due_date)) && !isDueToday && task.status !== 'completed') : false;
+  const isOverdue = task.due_date ? (isPast(parseISO(task.due_date)) && !isDueToday && task.status !== 'completed' && task.status !== 'cancelled') : false;
 
   const advanceTaskStatus = (t: Task) => {
-    const nextMap: Record<TaskStatus, TaskStatus> = { inbox: 'week', week: 'completed', risk: 'completed', completed: 'inbox' };
+    const nextMap: Record<TaskStatus, TaskStatus> = { inbox: 'week', week: 'completed', risk: 'completed', completed: 'inbox', cancelled: 'inbox' };
     onUpdateTask(t.id, { status: nextMap[t.status], completed_at: nextMap[t.status] === 'completed' ? new Date().toISOString() : null });
   };
 
@@ -718,15 +847,31 @@ function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailMod
       className={cn('group relative bg-card hover:bg-accent/30 border border-border/60 hover:border-primary/40 rounded-xl p-3 shadow-2xs hover:shadow-sm transition-all cursor-grab active:cursor-grabbing space-y-2 hover:-translate-y-0.5',
         isDragging && 'opacity-30 border-dashed border-primary ring-2 ring-primary/20')}>
       <div className={cn('absolute left-0 top-2 bottom-2 w-1 rounded-r-full',
+        task.status === 'cancelled' ? 'bg-rose-400' :
         task.priority === 'high' && task.status !== 'completed' ? 'bg-red-400' :
         task.priority === 'medium' && task.status !== 'completed' ? 'bg-yellow-400' :
         task.priority === 'low' && task.status !== 'completed' ? 'bg-green-400' : 'bg-transparent')} />
       <div className="flex items-start justify-between gap-2 pl-2">
-        <span className={cn('text-[12px] font-semibold leading-snug', task.status === 'completed' && 'line-through text-muted-foreground')}>
+        <span className={cn('text-[12px] font-semibold leading-snug', (task.status === 'completed' || task.status === 'cancelled') && 'line-through text-muted-foreground')}>
           {task.title}
         </span>
         <PriorityDot priority={task.priority} />
       </div>
+
+      {task.status === 'cancelled' && (
+        <div className="pl-2 space-y-1">
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 px-1.5 py-0.5 rounded border border-rose-200/50 dark:border-rose-900/40">
+            <Ban className="w-2.5 h-2.5 shrink-0" />
+            {task.cancellation_reason || 'Descartada'}
+          </span>
+          {task.cancellation_comment && (
+            <p className="text-[10px] text-muted-foreground italic line-clamp-1">
+              "{task.cancellation_comment}"
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-1.5 pl-2">
         {project && (
           <span className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold truncate max-w-[120px]"
@@ -762,16 +907,61 @@ function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailMod
             </span>
           ) : <span className="text-[10px] text-muted-foreground/60">Sin fecha</span>}
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           {assignee && (
             <div title={assignee.display_name} className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center text-[9px] font-bold text-primary shrink-0">
               {assignee.display_name.charAt(0).toUpperCase()}
             </div>
           )}
-          <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground opacity-70 group-hover:opacity-100"
-            onClick={(e) => { e.stopPropagation(); advanceTaskStatus(task); }} title="Avanzar etapa">
-            <ArrowRight className="w-3 h-3" />
-          </Button>
+          {task.status === 'cancelled' ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 px-1.5 text-[10px] text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/40 dark:hover:bg-rose-950/40 gap-1 shrink-0"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onReactivateTask) {
+                  onReactivateTask(task.id);
+                } else {
+                  onUpdateTask(task.id, {
+                    status: 'inbox',
+                    cancellation_reason: null,
+                    cancellation_comment: null,
+                    cancelled_at: null,
+                    cancelled_by: null,
+                  });
+                }
+              }}
+              title="Reactivar y mover a Inbox"
+            >
+              <RotateCcw className="w-2.5 h-2.5" />
+              <span>Reactivar</span>
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground/50 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCancelTask?.(task);
+                }}
+                title="Descartar / Cancelar tarea"
+              >
+                <Ban className="w-3 h-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-foreground opacity-70 group-hover:opacity-100"
+                onClick={(e) => { e.stopPropagation(); advanceTaskStatus(task); }}
+                title="Avanzar etapa"
+              >
+                <ArrowRight className="w-3 h-3" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -780,12 +970,14 @@ function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailMod
 
 // ─── List Mode Droppable Group ────────────────────────────────────────────
 
-function DroppableListGroup({ groupKey, isStage, tasks, label, colorDot, projectColor, clientObj, groupBg, projects, profiles, filters, onUpdateTask, onOpenDetailModal, onOpenEditModal, onClientTagClick }: {
+function DroppableListGroup({ groupKey, isStage, tasks, label, colorDot, projectColor, clientObj, groupBg, projects, profiles, filters, onUpdateTask, onOpenDetailModal, onOpenEditModal, onClientTagClick, onCancelTask, onReactivateTask }: {
   groupKey: string; isStage: boolean; tasks: Task[]; label: string; colorDot: string; projectColor?: string;
   clientObj?: Client | null; groupBg: string; projects: Project[]; profiles: Profile[];
   filters: TaskFiltersState; onUpdateTask: (id: string, data: any) => Promise<boolean>;
   onOpenDetailModal?: (task: Task) => void; onOpenEditModal?: (task: Task) => void;
   onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+  onCancelTask?: (task: Task) => void;
+  onReactivateTask?: (taskId: string) => void;
 }) {
   const droppableId = isStage ? `stage-${groupKey}` : groupKey;
   const { setNodeRef, isOver } = useDroppable({ id: droppableId });
@@ -810,7 +1002,9 @@ function DroppableListGroup({ groupKey, isStage, tasks, label, colorDot, project
         <div className={cn('rounded-lg overflow-hidden border border-border/40 transition-colors', groupBg, isOver && isStage && "border-primary/50 bg-primary/5")}>
           {tasks.map(task => (
             <SortableListCard key={task.id} task={task} projects={projects} profiles={profiles} filters={filters}
-              onUpdateTask={onUpdateTask} onOpenDetailModal={onOpenDetailModal} onOpenEditModal={onOpenEditModal} onClientTagClick={onClientTagClick} />
+              onUpdateTask={onUpdateTask} onOpenDetailModal={onOpenDetailModal} onOpenEditModal={onOpenEditModal} onClientTagClick={onClientTagClick}
+              onCancelTask={onCancelTask}
+              onReactivateTask={onReactivateTask} />
           ))}
           {tasks.length === 0 && (
             <div className="py-5 text-center text-xs text-muted-foreground/70">
@@ -825,11 +1019,13 @@ function DroppableListGroup({ groupKey, isStage, tasks, label, colorDot, project
 
 // ─── Sortable List Card ────────────────────────────────────────────────────
 
-function SortableListCard({ task, projects, profiles, filters, onUpdateTask, onOpenDetailModal, onOpenEditModal, onClientTagClick }: {
+function SortableListCard({ task, projects, profiles, filters, onUpdateTask, onOpenDetailModal, onOpenEditModal, onClientTagClick, onCancelTask, onReactivateTask }: {
   task: Task; projects: Project[]; profiles: Profile[];
   filters: TaskFiltersState; onUpdateTask: (id: string, data: any) => Promise<boolean>;
   onOpenDetailModal?: (task: Task) => void; onOpenEditModal?: (task: Task) => void;
   onClientTagClick: (e: React.MouseEvent, clientIdOrName: string | null) => void;
+  onCancelTask?: (task: Task) => void;
+  onReactivateTask?: (taskId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
   const style = { transform: CSS.Translate.toString(transform), transition };
@@ -846,16 +1042,36 @@ function SortableListCard({ task, projects, profiles, filters, onUpdateTask, onO
           onClick={(e) => e.stopPropagation()} title="Arrastrar para mover de etapa">
           <GripVertical className="w-4 h-4" />
         </button>
-        <button onClick={(e) => { e.stopPropagation(); onUpdateTask(task.id, { status: task.status === 'completed' ? 'inbox' : 'completed', completed_at: task.status === 'completed' ? null : new Date().toISOString() }); }}
-          className={cn('shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110',
-            task.status === 'completed' ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-muted-foreground/40 hover:border-primary')}>
-          {task.status === 'completed' && <CheckCircle2 className="w-3 h-3" />}
-        </button>
+        {task.status === 'cancelled' ? (
+          <div
+            className="shrink-0 w-5 h-5 rounded-full bg-rose-100 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 text-rose-600 dark:text-rose-400 flex items-center justify-center"
+            title="Tarea descartada"
+          >
+            <Ban className="w-3 h-3" />
+          </div>
+        ) : (
+          <button onClick={(e) => { e.stopPropagation(); onUpdateTask(task.id, { status: task.status === 'completed' ? 'inbox' : 'completed', completed_at: task.status === 'completed' ? null : new Date().toISOString() }); }}
+            className={cn('shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all hover:scale-110',
+              task.status === 'completed' ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-muted-foreground/40 hover:border-primary')}>
+            {task.status === 'completed' && <CheckCircle2 className="w-3 h-3" />}
+          </button>
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={cn('text-sm font-medium truncate', task.status === 'completed' && 'line-through text-muted-foreground')}>{task.title}</span>
+            <span className={cn('text-sm font-medium truncate', (task.status === 'completed' || task.status === 'cancelled') && 'line-through text-muted-foreground')}>{task.title}</span>
           </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {task.status === 'cancelled' && (
+              <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded font-medium bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200/50">
+                <Ban className="w-2.5 h-2.5 shrink-0" />
+                {task.cancellation_reason || 'Descartada'}
+                {task.cancellation_comment && (
+                  <span className="italic text-muted-foreground ml-1 font-normal truncate max-w-[200px]">
+                    — "{task.cancellation_comment}"
+                  </span>
+                )}
+              </span>
+            )}
             {project && (
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                 <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: project.color }} />{project.name}
@@ -876,7 +1092,7 @@ function SortableListCard({ task, projects, profiles, filters, onUpdateTask, onO
             )}
             {task.due_date && (() => {
               const isDueToday = isToday(parseISO(task.due_date));
-              const isOverdue = isPast(parseISO(task.due_date)) && !isDueToday && task.status !== 'completed';
+              const isOverdue = isPast(parseISO(task.due_date)) && !isDueToday && task.status !== 'completed' && task.status !== 'cancelled';
               return (
                 <span className={cn('text-[11px] flex items-center gap-1',
                   isOverdue ? 'text-red-500 font-medium' :
@@ -895,12 +1111,50 @@ function SortableListCard({ task, projects, profiles, filters, onUpdateTask, onO
             })()}
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <PriorityDot priority={task.priority} />
           {assignee && (
             <div title={assignee.display_name} className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary">
               {assignee.display_name.charAt(0).toUpperCase()}
             </div>
+          )}
+          {task.status === 'cancelled' ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[11px] text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/40 dark:hover:bg-rose-950/40 gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onReactivateTask) {
+                  onReactivateTask(task.id);
+                } else {
+                  onUpdateTask(task.id, {
+                    status: 'inbox',
+                    cancellation_reason: null,
+                    cancellation_comment: null,
+                    cancelled_at: null,
+                    cancelled_by: null,
+                  });
+                }
+              }}
+              title="Reactivar y mover a Inbox"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reactivar</span>
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground/50 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCancelTask?.(task);
+              }}
+              title="Descartar tarea"
+            >
+              <Ban className="w-3.5 h-3.5" />
+            </Button>
           )}
           <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => { e.stopPropagation(); onOpenEditModal?.(task); }} title="Editar tarea">
@@ -909,6 +1163,7 @@ function SortableListCard({ task, projects, profiles, filters, onUpdateTask, onO
         </div>
       </div>
       <div className={cn('absolute left-0 top-0 bottom-0 w-0.5 rounded-full',
+        task.status === 'cancelled' ? 'bg-rose-400' :
         task.priority === 'high' && task.status !== 'completed' ? 'bg-red-400' :
         task.priority === 'medium' && task.status !== 'completed' ? 'bg-yellow-400' :
         task.priority === 'low' && task.status !== 'completed' ? 'bg-green-400' : 'bg-transparent')} />

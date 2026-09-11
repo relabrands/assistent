@@ -52,11 +52,13 @@ import {
   CalendarDays,
   AlertTriangle,
   FolderGit2,
-  Clock,
-  RotateCcw,
+  Clock, 
+  RotateCcw, 
   Sparkles,
+  Ban,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { CancelTaskModal } from './CancelTaskModal';
 
 interface TaskDetailModalProps {
   open: boolean;
@@ -94,6 +96,12 @@ const STATUS_CONFIG: Record<TaskStatus, { label: string; icon: React.ReactNode; 
     color: 'text-emerald-600 dark:text-emerald-400',
     bg: 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-900',
   },
+  cancelled: {
+    label: 'Cancelada',
+    icon: <Ban className="w-3.5 h-3.5 text-rose-500" />,
+    color: 'text-rose-600 dark:text-rose-400',
+    bg: 'bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-900',
+  },
 };
 
 const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string; bg: string; dot: string }> = {
@@ -117,6 +125,7 @@ export function TaskDetailModal({
   const [newSubtask, setNewSubtask] = useState('');
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [activeTab, setActiveTab] = useState<'details' | 'notes'>('details');
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const { fetchNotes, addNote, deleteNote, loading: submitting } = useTaskNotes(currentProfile);
 
   useEffect(() => {
@@ -131,6 +140,10 @@ export function TaskDetailModal({
 
   const handleStatusChange = (newStatus: TaskStatus) => {
     if (!task || !onUpdateTask) return;
+    if (newStatus === 'cancelled') {
+      setIsCancelModalOpen(true);
+      return;
+    }
     const updates: Partial<Task> = { 
       status: newStatus,
       completed_at: newStatus === 'completed' ? new Date().toISOString() : null,
@@ -139,6 +152,39 @@ export function TaskDetailModal({
       updates.due_date = null;
     }
     onUpdateTask(task.id, updates);
+  };
+
+  const handleConfirmCancellation = async (taskId: string, reason: string, comment: string) => {
+    if (!onUpdateTask) return false;
+    onUpdateTask(taskId, {
+      status: 'cancelled',
+      cancellation_reason: reason,
+      cancellation_comment: comment || null,
+      cancelled_at: new Date().toISOString(),
+      cancelled_by: currentProfile?.id || null,
+    });
+
+    const noteText = `🚫 Tarea descartada / rechazada.\nMotivo: ${reason}${comment ? `\nComentario: ${comment}` : ''}`;
+    const added = await addNote(taskId, noteText);
+    if (added) {
+      setNotes(prev => [added, ...prev]);
+    }
+    return true;
+  };
+
+  const handleReactivateTask = async () => {
+    if (!task || !onUpdateTask) return;
+    onUpdateTask(task.id, {
+      status: 'inbox',
+      cancellation_reason: null,
+      cancellation_comment: null,
+      cancelled_at: null,
+      cancelled_by: null,
+    });
+    const added = await addNote(task.id, `🔄 Tarea reactivada y enviada a Inbox.`);
+    if (added) {
+      setNotes(prev => [added, ...prev]);
+    }
   };
 
   const handlePriorityChange = (newPriority: TaskPriority) => {
@@ -278,6 +324,12 @@ export function TaskDetailModal({
                       <span>Completada</span>
                     </div>
                   </SelectItem>
+                  <SelectItem value="cancelled">
+                    <div className="flex items-center gap-2 text-xs text-rose-600">
+                      <Ban className="w-3.5 h-3.5 text-rose-500" />
+                      <span>Descartada / Cancelada</span>
+                    </div>
+                  </SelectItem>
                 </SelectContent>
               </Select>
 
@@ -317,29 +369,82 @@ export function TaskDetailModal({
               </Select>
             </div>
 
-            {/* Edit modal trigger */}
-            {onEditTask && (
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleEdit} 
-                className="h-8 text-xs gap-1.5"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Editar todo</span>
-              </Button>
-            )}
+            {/* Action buttons: Descartar / Reactivar & Editar todo */}
+            <div className="flex items-center gap-2">
+              {task.status !== 'cancelled' ? (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => setIsCancelModalOpen(true)} 
+                  className="h-8 text-xs gap-1.5 text-rose-600 dark:text-rose-400 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 border-rose-200 dark:border-rose-900/40"
+                  title="Descartar o rechazar tarea con justificación"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Descartar</span>
+                </Button>
+              ) : (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={handleReactivateTask} 
+                  className="h-8 text-xs gap-1.5 text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/40"
+                  title="Reactivar tarea y devolver a Inbox"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reactivar tarea</span>
+                </Button>
+              )}
+
+              {onEditTask && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={handleEdit} 
+                  className="h-8 text-xs gap-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Editar todo</span>
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* Task Title */}
           <div>
             <h1 className={cn(
               "text-xl font-bold leading-snug tracking-tight text-foreground",
-              isCompleted && "line-through text-muted-foreground"
+              (isCompleted || task.status === 'cancelled') && "line-through text-muted-foreground"
             )}>
               {task.title}
             </h1>
           </div>
+
+          {/* Cancellation Banner */}
+          {task.status === 'cancelled' && (
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/40 text-xs space-y-1.5 animate-in fade-in-50 duration-200">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 font-bold text-rose-700 dark:text-rose-300">
+                  <Ban className="w-4 h-4 text-rose-600 shrink-0" />
+                  Esta tarea fue descartada / cancelada
+                </span>
+                {task.cancelled_at && (
+                  <span className="text-[11px] text-rose-500 font-medium">
+                    {format(parseISO(task.cancelled_at), "d 'de' MMMM, yyyy", { locale: es })}
+                  </span>
+                )}
+              </div>
+              {task.cancellation_reason && (
+                <p className="text-rose-900 dark:text-rose-100 font-medium">
+                  <span className="font-semibold text-rose-800 dark:text-rose-300">Motivo:</span> {task.cancellation_reason}
+                </p>
+              )}
+              {task.cancellation_comment && (
+                <p className="text-rose-800 dark:text-rose-200 italic bg-rose-100/60 dark:bg-rose-900/30 p-2.5 rounded-lg border border-rose-200/50 dark:border-rose-800/30">
+                  "{task.cancellation_comment}"
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Navigation Tabs between Details and Notes */}
@@ -672,6 +777,14 @@ export function TaskDetailModal({
         </div>
 
       </DialogContent>
+
+      <CancelTaskModal
+        open={isCancelModalOpen}
+        onOpenChange={setIsCancelModalOpen}
+        task={task}
+        currentProfile={currentProfile}
+        onConfirmCancel={handleConfirmCancellation}
+      />
     </Dialog>
   );
 }

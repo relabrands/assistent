@@ -65,7 +65,7 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
 
       // Smart Auto-promotion: automatically sync status according to due date
       const tasksToAutoPromote = items.filter(t => {
-        if (t.status === 'completed' || t.notion_page_id || !t.due_date) return false;
+        if (t.status === 'completed' || t.status === 'cancelled' || t.notion_page_id || !t.due_date) return false;
         try {
           const d = parseISO(t.due_date);
           if (isNaN(d.getTime())) return false;
@@ -197,6 +197,10 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     notion_page_id?: string | null;
     notion_database_id?: string | null;
     subtasks?: Subtask[];
+    cancellation_reason?: string | null;
+    cancellation_comment?: string | null;
+    cancelled_at?: string | null;
+    cancelled_by?: string | null;
   }) => {
     const updates: any = {
       updated_at: new Date().toISOString(),
@@ -213,6 +217,10 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
     if (taskData.notion_page_id !== undefined) updates.notion_page_id = taskData.notion_page_id;
     if (taskData.notion_database_id !== undefined) updates.notion_database_id = taskData.notion_database_id;
     if (taskData.subtasks !== undefined) updates.subtasks = taskData.subtasks;
+    if (taskData.cancellation_reason !== undefined) updates.cancellation_reason = taskData.cancellation_reason;
+    if (taskData.cancellation_comment !== undefined) updates.cancellation_comment = taskData.cancellation_comment;
+    if (taskData.cancelled_at !== undefined) updates.cancelled_at = taskData.cancelled_at;
+    if (taskData.cancelled_by !== undefined) updates.cancelled_by = taskData.cancelled_by;
     if (taskData.due_date !== undefined) {
       updates.due_date = taskData.due_date?.toISOString() || null;
     }
@@ -222,6 +230,16 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
         updates.completed_at = new Date().toISOString();
       } else {
         updates.completed_at = null;
+      }
+      if (taskData.status === 'cancelled') {
+        updates.cancelled_at = taskData.cancelled_at || new Date().toISOString();
+        if (profile?.id) updates.cancelled_by = profile.id;
+      } else if (taskData.status !== 'cancelled' && taskData.cancellation_reason === undefined) {
+        // Clear cancellation metadata when reactivating
+        updates.cancellation_reason = null;
+        updates.cancellation_comment = null;
+        updates.cancelled_at = null;
+        updates.cancelled_by = null;
       }
     }
 

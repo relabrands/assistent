@@ -1,5 +1,5 @@
 export type TaskArea = 'Personal' | 'RELA' | 'Nomi' | 'DOKTAP' | 'Venture Social';
-export type TaskStatus = 'inbox' | 'week' | 'risk' | 'completed';
+export type TaskStatus = 'inbox' | 'week' | 'risk' | 'completed' | 'cancelled';
 export type TaskPriority = 'high' | 'medium' | 'low';
 export type LifeArea = 'trabajo' | 'personal' | 'salud' | 'aprendizaje' | 'finanzas';
 export type SectorType = 'fintech' | 'healthtech' | 'edtech' | 'marketing' | 'ecommerce' | 'saas' | 'proptech' | 'foodtech' | 'other';
@@ -7,6 +7,15 @@ export type AppRole = 'admin' | 'collaborator' | 'client' | 'designer';
 export type InvitationStatus = 'pending' | 'accepted' | 'declined' | 'expired';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
 export type RecurrenceType = 'daily' | 'weekly' | 'biweekly' | 'monthly';
+
+export const CANCELLATION_REASONS = [
+  { value: 'cliente', label: 'Cancelado por el cliente' },
+  { value: 'estrategia', label: 'Cambio de estrategia / prioridad' },
+  { value: 'no_aplica', label: 'Ya no aplica / Obsoleto' },
+  { value: 'recursos', label: 'Falta de recursos o insumos' },
+  { value: 'duplicado', label: 'Tarea duplicada' },
+  { value: 'otro', label: 'Otro motivo' },
+] as const;
 
 export interface Profile {
   id: string;
@@ -70,6 +79,10 @@ export interface Task {
   notion_page_id?: string | null;
   notion_database_id?: string | null;
   subtasks?: Subtask[];
+  cancellation_reason?: string | null;
+  cancellation_comment?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
   created_at: string;
   updated_at: string;
 }
