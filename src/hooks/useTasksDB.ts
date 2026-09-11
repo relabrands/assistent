@@ -12,7 +12,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 import { db } from '@/integrations/firebase/client';
-import { Task, TaskStatus, Profile, TaskPriority, LifeArea, Workspace, RecurrenceType, Subtask } from '@/types/database';
+import { Task, TaskStatus, Profile, TaskPriority, LifeArea, Workspace, RecurrenceType, Subtask, isUnpublishedContentTask } from '@/types/database';
 import { useToast } from '@/hooks/use-toast';
 import { addDays, addWeeks, addMonths, isThisWeek, isPast, isToday, parseISO } from 'date-fns';
 
@@ -65,7 +65,7 @@ export function useTasksDB(profile: Profile | null, currentWorkspace: Workspace 
 
       // Smart Auto-promotion: automatically sync status according to due date
       const tasksToAutoPromote = items.filter(t => {
-        if (t.status === 'completed' || t.status === 'cancelled' || t.notion_page_id || !t.due_date) return false;
+        if (t.status === 'completed' || t.status === 'cancelled' || isUnpublishedContentTask(t) || !t.due_date) return false;
         try {
           const d = parseISO(t.due_date);
           if (isNaN(d.getTime())) return false;

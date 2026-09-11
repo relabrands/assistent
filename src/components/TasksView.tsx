@@ -17,7 +17,7 @@ import {
   useSortable 
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Task, Profile, Project, TaskStatus } from '@/types/database';
+import { Task, Profile, Project, TaskStatus, isUnpublishedContentTask } from '@/types/database';
 import { Client } from '@/types/content';
 import { TaskFilters, TaskFiltersState, filterTasks } from './TaskFilters';
 import { Button } from '@/components/ui/button';
@@ -60,7 +60,7 @@ type ViewMode = 'list' | 'board';
 
 export function getSmartTaskStatus(task: Task): TaskStatus {
   if (task.status === 'completed' || task.status === 'cancelled') return task.status;
-  if (task.notion_page_id) return task.status;
+  if (isUnpublishedContentTask(task)) return task.status;
   if (!task.due_date) return task.status || 'inbox';
 
   try {
@@ -188,12 +188,12 @@ export function TasksView({
     useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } })
   );
 
-  // Split tasks: notion/content vs regular with smart auto-categorization
-  const notionContentTasks = useMemo(() => tasks.filter(t => t.notion_page_id && t.status !== 'completed'), [tasks]);
+  // Split tasks: unpublished content items vs regular workflow tasks (including Notion quota/volume alerts)
+  const notionContentTasks = useMemo(() => tasks.filter(t => isUnpublishedContentTask(t) && t.status !== 'completed' && t.status !== 'cancelled'), [tasks]);
 
   const smartRegularTasks = useMemo(() => {
     return tasks
-      .filter(t => !t.notion_page_id)
+      .filter(t => !isUnpublishedContentTask(t))
       .map(t => {
         const smart = getSmartTaskStatus(t);
         if (smart !== t.status) {
@@ -205,7 +205,7 @@ export function TasksView({
 
   const allSmartTasks = useMemo(() => {
     return tasks.map(t => {
-      if (t.notion_page_id) return t;
+      if (isUnpublishedContentTask(t)) return t;
       const smart = getSmartTaskStatus(t);
       if (smart !== t.status) return { ...t, status: smart };
       return t;
@@ -887,6 +887,11 @@ function SortableKanbanCard({ task, projects, profiles, filters, onOpenDetailMod
             <Users className="w-2.5 h-2.5 shrink-0" />
             <span className="truncate">{task.client}</span>
           </button>
+        )}
+        {task.notion_page_id && (
+          <span className="text-[8px] px-1 py-0.5 rounded border border-foreground/15 font-bold text-muted-foreground/70 shrink-0" title="Sincronizado desde Notion">
+            N
+          </span>
         )}
       </div>
       <div className="flex items-center justify-between pt-1.5 border-t border-border/30 text-[10px] text-muted-foreground pl-2">

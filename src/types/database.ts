@@ -87,6 +87,23 @@ export interface Task {
   updated_at: string;
 }
 
+/**
+ * Helper to identify if a task specifically represents an unpublished post from Notion.
+ * All other tasks (including Notion quota/volume alerts like "🚨 Alerta Volumen...") are regular
+ * operational tasks and belong in the standard Kanban/Sprint columns (Inbox, Esta semana, En riesgo).
+ */
+export function isUnpublishedContentTask(task: { title?: string | null; notion_page_id?: string | null } | null | undefined): boolean {
+  if (!task || !task.notion_page_id) return false;
+  // Quota and volume alerts are operational tasks that belong in the normal workflow
+  if (task.notion_page_id.startsWith('quota_')) return false;
+  const title = (task.title || '').toLowerCase();
+  if (title.includes('alerta volumen') || title.includes('alerta de volumen') || title.includes('cuota')) {
+    return false;
+  }
+  // Only tasks specifically indicating unpublished content belong in the dedicated content column
+  return title.includes('no publicado') || title.startsWith('⚠️');
+}
+
 export const RECURRENCE_LABELS: Record<RecurrenceType, string> = {
   daily: 'Diaria',
   weekly: 'Semanal',
