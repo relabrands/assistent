@@ -277,7 +277,7 @@ export async function syncNotionLogic({
 
     // Match client
     const matchedClient = findMatchingClient(dbItem.title, dbCleanId);
-    const clientName = matchedClient?.name || dbItem.title;
+    const clientName = matchedClient?.brand_name || matchedClient?.name || dbItem.title;
     const clientQuota = matchedClient?.monthly_content_quota || 8; // Default 8 posts/month quota
 
     for (const page of pages) {
@@ -442,18 +442,49 @@ export async function syncNotionLogic({
 
     // Check Monthly Quota & Auto-resolution
     let createdQuotaAlert = false;
+    const brandName = matchedClient?.brand_name || "";
+    const legalName = matchedClient?.name || "";
     const quotaDedupeKey = `quota_${normalizeName(clientName)}_${currentMonthStr}`;
     const existingQuotaDoc = existingTasksMap.get(quotaDedupeKey);
 
-    // Find any active or legacy quota alerts for this client in the current month
+    // Find any active or legacy quota alerts or monthly content planning tasks for this client in the current month
     const matchingQuotaDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+    const matchingContentPlanningTasks: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+
     tasksSnap.docs.forEach(doc => {
       const data = doc.data();
+      const pId = data.notion_page_id || "";
+      const dClient = (data.client || "").toLowerCase();
+      const dTitle = (data.title || "").toLowerCase();
+      const isThisClient =
+        dClient === clientName.toLowerCase() ||
+        (brandName && dClient === brandName.toLowerCase()) ||
+        (legalName && dClient === legalName.toLowerCase()) ||
+        dClient === dbItem.title.toLowerCase() ||
+        dTitle.includes(clientName.toLowerCase()) ||
+        (brandName && dTitle.includes(brandName.toLowerCase())) ||
+        dTitle.includes(dbItem.title.toLowerCase());
+
       if (
-        data.notion_page_id === quotaDedupeKey ||
-        (data.client === clientName && data.title && data.title.includes("Alerta Volumen") && data.title.includes(currentMonthLabel))
+        pId === quotaDedupeKey ||
+        (brandName && pId === `quota_${normalizeName(brandName)}_${currentMonthStr}`) ||
+        (legalName && pId === `quota_${normalizeName(legalName)}_${currentMonthStr}`) ||
+        pId === `quota_${normalizeName(dbItem.title)}_${currentMonthStr}` ||
+        (isThisClient && dTitle.includes("alerta volumen"))
       ) {
         matchingQuotaDocs.push(doc);
+      }
+
+      // Check if there is a manual task to create/plan monthly content for this client
+      if (
+        isThisClient &&
+        !pId &&
+        dTitle.includes("contenido") &&
+        (dTitle.includes("septiembre") || dTitle.includes("mes") || dTitle.includes("cuota")) &&
+        data.status !== "completed" &&
+        data.status !== "cancelled"
+      ) {
+        matchingContentPlanningTasks.push(doc);
       }
     });
 
@@ -464,6 +495,51 @@ export async function syncNotionLogic({
         existingTasksMap.delete(qDoc.data().notion_page_id);
         existingNotionIds.delete(qDoc.data().notion_page_id);
         console.log(`[NotionSync] Quota fulfilled for ${clientName} (${dbMonthPostsCount}/${clientQuota}). Removed alert task ${qDoc.id}`);
+      }
+      // Also auto-complete any manual monthly content creation tasks for this client since content is now in Notion!
+      for (const cpDoc of matchingContentPlanningTasks) {
+        await cpDoc.ref.update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          notes: (cpDoc.data().notes || "") + `\n\n[Auto-Sync] Se detectaron ${dbMonthPostsCount} contenidos en Notion para ${currentMonthLabel}. Tarea completada automáticamente.`,
+          updated_at: new Date().toISOString()
+        });
+        console.log(`[NotionSync] Auto-completed content planning task "${cpDoc.data().title}" for ${clientName}`);
+      }
+
+      // Check checklist tasks where subtasks list this brand/client
+      for (const tDoc of tasksSnap.docs) {
+        const data = tDoc.data();
+        if (data.status === "completed" || data.status === "cancelled") continue;
+        if (!Array.isArray(data.subtasks) || data.subtasks.length === 0) continue;
+
+        let hasModifiedSubtask = false;
+        const updatedSubtasks = data.subtasks.map((st: any) => {
+          const stTitle = (st.title || "").toLowerCase();
+          const matches =
+            stTitle.includes(clientName.toLowerCase()) ||
+            (brandName && stTitle.includes(brandName.toLowerCase())) ||
+            stTitle.includes(dbItem.title.toLowerCase());
+          if (matches && !st.completed) {
+            hasModifiedSubtask = true;
+            return { ...st, completed: true };
+          }
+          return st;
+        });
+
+        if (hasModifiedSubtask) {
+          const allCompleted = updatedSubtasks.every((st: any) => st.completed);
+          const updateData: any = {
+            subtasks: updatedSubtasks,
+            updated_at: new Date().toISOString()
+          };
+          if (allCompleted) {
+            updateData.status = "completed";
+            updateData.completed_at = new Date().toISOString();
+          }
+          await tDoc.ref.update(updateData);
+          console.log(`[NotionSync] Checked checklist subtask for ${clientName} in task "${data.title}" (allCompleted=${allCompleted})`);
+        }
       }
     } else {
       // Quota is below target
