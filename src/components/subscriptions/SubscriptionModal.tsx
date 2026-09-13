@@ -180,8 +180,8 @@ export function SubscriptionModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] sm:max-w-xl md:max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 rounded-2xl">
-        <DialogHeader className="w-full min-w-0 text-left">
+      <DialogContent className="w-[95vw] sm:max-w-xl md:max-w-2xl max-h-[90vh] p-0 flex flex-col gap-0 rounded-2xl overflow-hidden shadow-2xl border bg-background">
+        <DialogHeader className="p-4 sm:p-5 pr-12 border-b shrink-0 text-left bg-background">
           <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
             <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
               <CreditCard className="w-4 h-4" />
@@ -190,32 +190,35 @@ export function SubscriptionModal({
           </DialogTitle>
         </DialogHeader>
 
-        {!isEditing && (
-          <div className="space-y-1.5 pb-2 border-b w-full min-w-0 overflow-hidden">
-            <Label className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-              <span>Sugerencias rápidas:</span>
-            </Label>
-            <div className="flex gap-1.5 overflow-x-auto pb-1.5 scrollbar-none w-full min-w-0">
-              {SUBSCRIPTION_PRESETS.map((preset) => (
-                <button
-                  key={preset.name}
-                  type="button"
-                  onClick={() => handleApplyPreset(preset)}
-                  className="px-2.5 py-1 text-xs rounded-full border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-colors whitespace-nowrap flex items-center gap-1.5 shrink-0"
-                >
-                  <span
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: preset.color }}
-                  />
-                  <span>{preset.name}</span>
-                </button>
-              ))}
+        <form
+          id="subscription-form"
+          onSubmit={handleSubmit}
+          className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 space-y-4 min-w-0"
+        >
+          {!isEditing && (
+            <div className="space-y-1.5 pb-2.5 border-b w-full min-w-0">
+              <Label className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>Sugerencias rápidas:</span>
+              </Label>
+              <div className="flex gap-1.5 overflow-x-auto pb-1.5 scrollbar-none w-full min-w-0">
+                {SUBSCRIPTION_PRESETS.map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => handleApplyPreset(preset)}
+                    className="px-2.5 py-1 text-xs rounded-full border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-colors whitespace-nowrap flex items-center gap-1.5 shrink-0 active:scale-95"
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: preset.color }}
+                    />
+                    <span>{preset.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4 pt-1 w-full min-w-0">
+          )}
           {/* Nombre y Categoría */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full min-w-0">
             <div className="space-y-1.5 min-w-0">
@@ -482,23 +485,29 @@ export function SubscriptionModal({
               className="resize-none text-xs w-full"
             />
           </div>
-
-          <DialogFooter className="gap-2 pt-2 border-t w-full min-w-0 sm:flex-row flex-col-reverse">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => onOpenChange(false)}
-              disabled={isSubmitting}
-              className="w-full sm:w-auto"
-            >
-              Cancelar
-            </Button>
-            <Button type="submit" size="sm" disabled={isSubmitting} className="w-full sm:w-auto font-semibold">
-              {isSubmitting ? 'Guardando...' : isEditing ? 'Actualizar' : 'Guardar Suscripción'}
-            </Button>
-          </DialogFooter>
         </form>
+
+        <DialogFooter className="p-3 sm:p-4 border-t shrink-0 bg-muted/20 flex flex-col-reverse sm:flex-row justify-end gap-2 w-full">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={isSubmitting}
+            className="w-full sm:w-auto"
+          >
+            Cancelar
+          </Button>
+          <Button
+            type="submit"
+            form="subscription-form"
+            size="sm"
+            disabled={isSubmitting}
+            className="w-full sm:w-auto font-semibold shadow-sm"
+          >
+            {isSubmitting ? 'Guardando...' : isEditing ? 'Actualizar' : 'Guardar Suscripción'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
