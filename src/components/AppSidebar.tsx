@@ -14,7 +14,8 @@ import {
   LogOut,
   Sparkles,
   ShoppingBag,
-  Timer
+  Timer,
+  CreditCard
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -43,7 +44,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
-export type SidebarView = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'clients' | 'store' | 'focus';
+export type SidebarView = 'dashboard' | 'tasks' | 'calendar' | 'projects' | 'clients' | 'store' | 'focus' | 'subscriptions';
 
 interface AppSidebarProps {
   profile: Profile;
@@ -64,6 +65,7 @@ const mainNavItems = [
   { id: 'tasks' as SidebarView, title: 'Tareas', icon: ListTodo },
   { id: 'calendar' as SidebarView, title: 'Calendario', icon: CalendarDays },
   { id: 'projects' as SidebarView, title: 'Proyectos', icon: FolderKanban },
+  { id: 'subscriptions' as SidebarView, title: 'Suscripciones', icon: CreditCard },
   { id: 'focus' as SidebarView, title: 'Enfoque', icon: Timer },
   { id: 'store' as SidebarView, title: 'Tienda', icon: ShoppingBag },
 ];

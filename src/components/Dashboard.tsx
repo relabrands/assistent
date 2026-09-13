@@ -23,6 +23,7 @@ import { CollaboratorDashboard } from './dashboard/CollaboratorDashboard';
 import { AppSidebar, SidebarView } from './AppSidebar';
 import { StoreView } from './store/StoreView';
 import { PomodoroView } from './pomodoro/PomodoroView';
+import { SubscriptionsView } from './subscriptions/SubscriptionsView';
 import { useTasksDB } from '@/hooks/useTasksDB';
 import { useProjects } from '@/hooks/useProjects';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
@@ -124,6 +125,7 @@ export function Dashboard() {
     if (pathname.startsWith('/projects')) return 'projects';
     if (pathname.startsWith('/focus')) return 'focus';
     if (pathname.startsWith('/store')) return 'store';
+    if (pathname.startsWith('/subscriptions')) return 'subscriptions';
     if (pathname.startsWith('/clients')) return 'clients';
     return 'dashboard';
   };
@@ -132,6 +134,7 @@ export function Dashboard() {
     if (pathname.startsWith('/tasks')) return 'tasks';
     if (pathname.startsWith('/projects')) return 'projects';
     if (pathname.startsWith('/focus')) return 'focus';
+    if (pathname.startsWith('/subscriptions')) return 'subscriptions';
     if (pathname.startsWith('/clients')) return 'clients';
     return 'home';
   };
@@ -155,6 +158,7 @@ export function Dashboard() {
       projects: '/projects',
       focus: '/focus',
       store: '/store',
+      subscriptions: '/subscriptions',
       clients: '/projects',
     };
     navigate(pathMap[view]);
@@ -167,6 +171,7 @@ export function Dashboard() {
       projects: '/projects',
       focus: '/focus',
       store: '/store',
+      subscriptions: '/subscriptions',
     };
     navigate(pathMap[tab] || '/');
   };
@@ -405,6 +410,16 @@ export function Dashboard() {
       case 'store':
         return <StoreView profile={profile} />;
 
+      case 'subscriptions':
+        return (
+          <SubscriptionsView
+            profile={currentProfile || profile}
+            projects={projects}
+            profiles={profiles}
+            currentWorkspace={currentWorkspace}
+          />
+        );
+
       case 'clients':
         if (clientsProject) {
           return (
@@ -625,6 +640,15 @@ export function Dashboard() {
             {mobileTab === 'store' && (
               <StoreView profile={profile} />
             )}
+
+            {mobileTab === 'subscriptions' && (
+              <SubscriptionsView
+                profile={currentProfile || profile}
+                projects={projects}
+                profiles={profiles}
+                currentWorkspace={currentWorkspace}
+              />
+            )}
           </div>
         </div>
         
@@ -672,6 +696,7 @@ export function Dashboard() {
                     {desktopView === 'tasks' && 'Tareas'}
                     {desktopView === 'calendar' && 'Calendario'}
                     {desktopView === 'projects' && 'Proyectos'}
+                    {desktopView === 'subscriptions' && 'Suscripciones'}
                     {desktopView === 'focus' && 'Enfoque'}
                     {desktopView === 'clients' && clientsProject && `Clientes — ${clientsProject.name}`}
                   </h1>
