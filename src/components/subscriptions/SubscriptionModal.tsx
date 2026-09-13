@@ -180,32 +180,32 @@ export function SubscriptionModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-lg">
-            <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+      <DialogContent className="w-[95vw] sm:max-w-xl md:max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6 rounded-2xl">
+        <DialogHeader className="w-full min-w-0 text-left">
+          <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
               <CreditCard className="w-4 h-4" />
             </div>
-            <span>{isEditing ? 'Editar Suscripción' : 'Nueva Suscripción'}</span>
+            <span className="truncate">{isEditing ? 'Editar Suscripción' : 'Nueva Suscripción'}</span>
           </DialogTitle>
         </DialogHeader>
 
         {!isEditing && (
-          <div className="space-y-1.5 pb-2 border-b">
+          <div className="space-y-1.5 pb-2 border-b w-full min-w-0 overflow-hidden">
             <Label className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              Sugerencias rápidas:
+              <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>Sugerencias rápidas:</span>
             </Label>
-            <div className="flex gap-1.5 overflow-x-auto pb-1.5 scrollbar-none">
+            <div className="flex gap-1.5 overflow-x-auto pb-1.5 scrollbar-none w-full min-w-0">
               {SUBSCRIPTION_PRESETS.map((preset) => (
                 <button
                   key={preset.name}
                   type="button"
                   onClick={() => handleApplyPreset(preset)}
-                  className="px-2.5 py-1 text-xs rounded-full border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-colors whitespace-nowrap flex items-center gap-1.5"
+                  className="px-2.5 py-1 text-xs rounded-full border bg-muted/40 hover:bg-muted hover:border-primary/40 transition-colors whitespace-nowrap flex items-center gap-1.5 shrink-0"
                 >
                   <span
-                    className="w-2 h-2 rounded-full"
+                    className="w-2 h-2 rounded-full shrink-0"
                     style={{ backgroundColor: preset.color }}
                   />
                   <span>{preset.name}</span>
@@ -215,10 +215,10 @@ export function SubscriptionModal({
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+        <form onSubmit={handleSubmit} className="space-y-4 pt-1 w-full min-w-0">
           {/* Nombre y Categoría */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full min-w-0">
+            <div className="space-y-1.5 min-w-0">
               <Label htmlFor="sub-name" className="text-xs font-semibold">
                 Nombre del servicio *
               </Label>
@@ -228,14 +228,14 @@ export function SubscriptionModal({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                className="h-9"
+                className="h-9 w-full"
               />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold">Categoría</Label>
               <Select value={category} onValueChange={(val) => setCategory(val as SubscriptionCategory)}>
-                <SelectTrigger className="h-9">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="Seleccionar categoría" />
                 </SelectTrigger>
                 <SelectContent>
@@ -250,12 +250,12 @@ export function SubscriptionModal({
           </div>
 
           {/* Costo, Moneda y Ciclo */}
-          <div className="grid grid-cols-3 gap-2.5 p-3 rounded-xl bg-muted/30 border">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-3 rounded-xl bg-muted/30 border w-full min-w-0">
+            <div className="space-y-1.5 min-w-0">
               <Label htmlFor="sub-cost" className="text-xs font-semibold">
                 Costo *
               </Label>
-              <div className="relative">
+              <div className="relative w-full">
                 <span className="absolute left-2.5 top-2.5 text-xs text-muted-foreground font-bold">
                   {currency === 'USD' ? '$' : currency === 'DOP' ? 'RD$' : '€'}
                 </span>
@@ -267,16 +267,16 @@ export function SubscriptionModal({
                   placeholder="0.00"
                   value={cost}
                   onChange={(e) => setCost(e.target.value)}
-                  className="h-9 pl-8 font-semibold"
+                  className="h-9 pl-8 font-semibold w-full"
                   required
                 />
               </div>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold">Moneda</Label>
               <Select value={currency} onValueChange={(val) => setCurrency(val as SubscriptionCurrency)}>
-                <SelectTrigger className="h-9">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -287,13 +287,13 @@ export function SubscriptionModal({
               </Select>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold">Frecuencia</Label>
               <Select
                 value={billingCycle}
                 onValueChange={(val) => setBillingCycle(val as SubscriptionBillingCycle)}
               >
-                <SelectTrigger className="h-9">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -308,11 +308,11 @@ export function SubscriptionModal({
           </div>
 
           {/* Fechas de pago */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full min-w-0">
+            <div className="space-y-1.5 min-w-0">
               <Label htmlFor="sub-day" className="text-xs font-semibold flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-primary" />
-                Día del mes de cobro (1 - 31)
+                <Calendar className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span>Día del mes de cobro (1 - 31)</span>
               </Label>
               <Input
                 id="sub-day"
@@ -322,47 +322,47 @@ export function SubscriptionModal({
                 placeholder="Ej. 15"
                 value={paymentDay}
                 onChange={(e) => setPaymentDay(e.target.value)}
-                className="h-9"
+                className="h-9 w-full"
               />
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-[10px] text-muted-foreground leading-tight">
                 Día en que se realiza el débito automáticamente cada mes.
               </p>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label htmlFor="sub-next-date" className="text-xs font-semibold flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
-                Próxima fecha exacta (opcional)
+                <Calendar className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <span>Próxima fecha exacta (opcional)</span>
               </Label>
               <Input
                 id="sub-next-date"
                 type="date"
                 value={nextPaymentDate}
                 onChange={(e) => setNextPaymentDate(e.target.value)}
-                className="h-9"
+                className="h-9 w-full"
               />
-              <p className="text-[10px] text-muted-foreground">
+              <p className="text-[10px] text-muted-foreground leading-tight">
                 Útil para cobros anuales o fechas específicas de renovación.
               </p>
             </div>
           </div>
 
           {/* Proyecto y Responsable ("De quién es" y "De qué proyecto") */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-xl bg-muted/20 border">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-xl bg-muted/20 border w-full min-w-0">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold flex items-center gap-1.5">
-                <FolderKanban className="w-3.5 h-3.5 text-primary" />
-                Proyecto registrado
+                <FolderKanban className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span>Proyecto registrado</span>
               </Label>
               <Select value={projectId} onValueChange={setProjectId}>
-                <SelectTrigger className="h-9">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="Seleccionar proyecto" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">General / Sin proyecto específico</SelectItem>
                   {projects.map((proj) => (
                     <SelectItem key={proj.id} value={proj.id}>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 max-w-[200px] truncate">
                         {proj.color && (
                           <span
                             className="w-2.5 h-2.5 rounded-full shrink-0"
@@ -377,23 +377,23 @@ export function SubscriptionModal({
               </Select>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold flex items-center gap-1.5">
-                <User className="w-3.5 h-3.5 text-primary" />
-                ¿De quién es? (Responsable)
+                <User className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span>¿De quién es? (Responsable)</span>
               </Label>
               <Select value={ownerId} onValueChange={handleOwnerChange}>
-                <SelectTrigger className="h-9">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="Seleccionar miembro" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Empresa / General</SelectItem>
                   {profiles.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{p.display_name}</span>
+                      <div className="flex items-center gap-2 max-w-[200px] truncate">
+                        <span className="font-medium truncate">{p.display_name}</span>
                         {p.email && (
-                          <span className="text-[10px] text-muted-foreground">({p.email})</span>
+                          <span className="text-[10px] text-muted-foreground truncate">({p.email})</span>
                         )}
                       </div>
                     </SelectItem>
@@ -404,11 +404,11 @@ export function SubscriptionModal({
           </div>
 
           {/* Estado y Método de Pago */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full min-w-0">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold">Estado de la suscripción</Label>
               <Select value={status} onValueChange={(val) => setStatus(val as SubscriptionStatus)}>
-                <SelectTrigger className="h-9">
+                <SelectTrigger className="h-9 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -420,27 +420,27 @@ export function SubscriptionModal({
               </Select>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label htmlFor="sub-method" className="text-xs font-semibold flex items-center gap-1.5">
-                <CreditCard className="w-3.5 h-3.5 text-muted-foreground" />
-                Método de pago
+                <CreditCard className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <span>Método de pago</span>
               </Label>
               <Input
                 id="sub-method"
                 placeholder="Ej. Visa Popular *4092, PayPal, BHD"
                 value={paymentMethod}
                 onChange={(e) => setPaymentMethod(e.target.value)}
-                className="h-9"
+                className="h-9 w-full"
               />
             </div>
           </div>
 
           {/* Enlace y Correo de acceso */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full min-w-0">
+            <div className="space-y-1.5 min-w-0">
               <Label htmlFor="sub-url" className="text-xs font-semibold flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5 text-muted-foreground" />
-                Sitio web / Panel de login
+                <Globe className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <span>Sitio web / Panel de login</span>
               </Label>
               <Input
                 id="sub-url"
@@ -448,14 +448,14 @@ export function SubscriptionModal({
                 placeholder="https://..."
                 value={websiteUrl}
                 onChange={(e) => setWebsiteUrl(e.target.value)}
-                className="h-9"
+                className="h-9 w-full"
               />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label htmlFor="sub-email" className="text-xs font-semibold flex items-center gap-1.5">
-                <Mail className="w-3.5 h-3.5 text-muted-foreground" />
-                Correo de la cuenta
+                <Mail className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <span>Correo de la cuenta</span>
               </Label>
               <Input
                 id="sub-email"
@@ -463,13 +463,13 @@ export function SubscriptionModal({
                 placeholder="ejemplo@relabrands.com"
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
-                className="h-9"
+                className="h-9 w-full"
               />
             </div>
           </div>
 
           {/* Notas */}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 w-full min-w-0">
             <Label htmlFor="sub-notes" className="text-xs font-semibold">
               Notas adicionales
             </Label>
@@ -479,21 +479,22 @@ export function SubscriptionModal({
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
-              className="resize-none text-xs"
+              className="resize-none text-xs w-full"
             />
           </div>
 
-          <DialogFooter className="gap-2 pt-2 border-t">
+          <DialogFooter className="gap-2 pt-2 border-t w-full min-w-0 sm:flex-row flex-col-reverse">
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
+              className="w-full sm:w-auto"
             >
               Cancelar
             </Button>
-            <Button type="submit" size="sm" disabled={isSubmitting}>
+            <Button type="submit" size="sm" disabled={isSubmitting} className="w-full sm:w-auto font-semibold">
               {isSubmitting ? 'Guardando...' : isEditing ? 'Actualizar' : 'Guardar Suscripción'}
             </Button>
           </DialogFooter>
